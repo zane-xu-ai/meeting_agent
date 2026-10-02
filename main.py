@@ -1,15 +1,13 @@
 """会议助手智能体 - CLI 入口
 
 用法:
-    python main.py <音频文件路径>
-    python main.py meeting.wav --output markdown
-    python main.py meeting.mp3 --output json
+    python main.py transcript-only <音频路径或URL>   # 仅 ASR 转写
+    python main.py analyze <音频路径或URL>            # 完整分析 (ASR + LLM)
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -19,13 +17,24 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from agent.pipeline import MeetingPipeline, format_markdown
+from agent.cache import (
+    get_audio_stem,
+    load_asr_cache,
+    load_summary_cache,
+    save_asr_cache,
+    save_summary_cache,
+)
+from agent.pipeline import format_markdown
+from agent.text_processor import TextProcessor
 from config import settings
 
 # 配置 loguru
 logger.remove()
-logger.add(sys.stderr, level="INFO",
-           format="<green>{time:HH:mm:ss}</green> | {message}")
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format="<green>{time:HH:mm:ss}</green> | {message}",
+)
 
 app = typer.Typer(
     name="meeting-agent",
@@ -33,6 +42,80 @@ app = typer.Typer(
 )
 console = Console()
 
+
+# ---------- 公共: 获取 ASR 转写文本 (带缓存) ----------
+
+async def _get_transcript_text(audio_source: str, audio_stem: str) -> tuple[str, bool]:
+    """
+    获取 ASR 转写文本，优先使用缓存。
+
+    返回: (转写文本, is_from_cache: bool)
+    """
+    from agent.asr_client import ASRClient
+    from utils.audio import preprocess_audio
+
+    # 1. 检查 ASR 缓存
+    cached = load_asr_cache(audio_stem)
+    if cached is not None:
+        console.print(
+            f"[green]使用 ASR 缓存: {audio_stem}_{settings.asr_model}.txt[/green]")
+        return cached, True
+
+    # 2. 缓存未命中，执行 ASR 转写
+    is_url = audio_source.startswith(("http://", "https://"))
+    if is_url:
+        asr_input = audio_source
+        preprocessed = None
+    else:
+        preprocessed = preprocess_audio(
+            audio_source, sample_rate=settings.asr_sample_rate)
+        asr_input = preprocessed
+
+    try:
+        asr = ASRClient()
+        transcript = await asr.transcribe(asr_input)
+    finally:
+        if preprocessed and preprocessed.exists():
+            preprocessed.unlink()
+
+    # 3. 文本预处理
+    processor = TextProcessor()
+    cleaned = processor.clean(transcript)
+    transcript_text = cleaned.formatted_text
+
+    # 4. 保存 ASR 缓存
+    save_asr_cache(transcript_text, audio_stem)
+    console.print(
+        f"[green]ASR 结果已保存: {audio_stem}_{settings.asr_model}.txt[/green]")
+
+    return transcript_text, False
+
+
+# ---------- transcript-only 命令 ----------
+
+@app.command()
+def transcript_only(
+    audio: str = typer.Argument(..., help="音频文件路径或 URL"),
+):
+    """仅执行 ASR 转写，不进行 LLM 分析 (用于调试)"""
+    if not settings.dashscope_api_key:
+        console.print("[red]错误: 未配置 DASHSCOPE_API_KEY[/red]")
+        raise typer.Exit(1)
+
+    is_url = audio.startswith(("http://", "https://"))
+    display_name = "远程音频" if is_url else Path(audio).name
+    audio_stem = get_audio_stem(audio)
+
+    console.print(f"[bold]转写音频:[/bold] {display_name}")
+
+    transcript_text, from_cache = asyncio.run(
+        _get_transcript_text(audio, audio_stem))
+
+    console.print("\n[bold]转写结果:[/bold]")
+    console.print(transcript_text)
+
+
+# ---------- analyze 命令 ----------
 
 @app.command()
 def analyze(
@@ -46,11 +129,6 @@ def analyze(
         "-o",
         help="输出格式: markdown 或 json",
     ),
-    save: bool = typer.Option(
-        True,
-        "--save/--no-save",
-        help="是否保存结果到文件",
-    ),
     verbose: bool = typer.Option(
         False,
         "--verbose",
@@ -61,8 +139,11 @@ def analyze(
     """分析会议音频，生成结构化会议纪要"""
     if verbose:
         logger.remove()
-        logger.add(sys.stderr, level="DEBUG",
-                   format="{time:HH:mm:ss} | {level} | {message}")
+        logger.add(
+            sys.stderr,
+            level="DEBUG",
+            format="{time:HH:mm:ss} | {level} | {message}",
+        )
 
     # 检查 API Key
     if not settings.dashscope_api_key:
@@ -75,6 +156,7 @@ def analyze(
 
     is_url = audio.startswith(("http://", "https://"))
     display_name = "远程音频" if is_url else Path(audio).name
+    audio_stem = get_audio_stem(audio)
 
     console.print(
         Panel(
@@ -86,76 +168,50 @@ def analyze(
         )
     )
 
-    # 执行流水线
-    pipeline = MeetingPipeline()
-    result = asyncio.run(pipeline.run(audio))
+    # 1. 检查 Summary 缓存
+    cached_summary = load_summary_cache(audio_stem)
+    if cached_summary is not None:
+        console.print(
+            f"[green]使用 Summary 缓存: "
+            f"{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+        )
+        console.print(Markdown(cached_summary))
+        return
 
-    # 输出结果
-    if output_format == "json":
-        output_text = result.model_dump_json(indent=2)
-        console.print_json(output_text)
-    else:
-        output_text = format_markdown(result)
-        console.print(Markdown(output_text))
+    # 2. Summary 缓存未命中，需要生成
+    # 2a. 获取 ASR 转写文本 (带缓存)
+    logger.info("[1/2] ASR 语音转写...")
+    transcript_text, asr_from_cache = asyncio.run(
+        _get_transcript_text(audio, audio_stem))
 
-    # 保存文件
-    if save:
-        output_dir = settings.output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        if is_url:
-            stem = "remote_audio"
-        else:
-            stem = Path(audio).stem
-
-        if output_format == "json":
-            out_path = output_dir / f"{stem}_meeting.json"
-            out_path.write_text(result.model_dump_json(
-                indent=2), encoding="utf-8")
-        else:
-            out_path = output_dir / f"{stem}_meeting.md"
-            out_path.write_text(output_text, encoding="utf-8")
-
-        console.print(f"\n[green]结果已保存到: {out_path}[/green]")
-
-
-@app.command()
-def transcript_only(
-    audio: str = typer.Argument(..., help="音频文件路径或 URL"),
-):
-    """仅执行 ASR 转写，不进行 LLM 分析 (用于调试)"""
-    if not settings.dashscope_api_key:
-        console.print("[red]错误: 未配置 DASHSCOPE_API_KEY[/red]")
+    if not transcript_text.strip():
+        console.print("[red]错误: ASR 转写结果为空，请检查音频文件是否包含有效语音[/red]")
         raise typer.Exit(1)
 
-    from agent.asr_client import ASRClient
-    from agent.text_processor import TextProcessor
-    from utils.audio import preprocess_audio
+    # 2b. LLM 分析
+    logger.info("[2/2] LLM 智能分析...")
+    from agent.llm_client import LLMClient
+    from agent.prompts import MEETING_ANALYSIS_PROMPT
+    from models.schemas import MeetingResult
 
-    is_url = audio.startswith(("http://", "https://"))
-    display_name = "远程音频" if is_url else Path(audio).name
-    console.print(f"[bold]转写音频:[/bold] {display_name}")
+    llm = LLMClient()
+    prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
+    data = asyncio.run(llm.chat_json(prompt))
+    result = MeetingResult.model_validate(data)
 
-    if is_url:
-        asr_input = audio
-        preprocessed = None
+    # 3. 格式化并保存 Summary 缓存
+    output_text = format_markdown(result)
+    save_summary_cache(output_text, audio_stem)
+    console.print(
+        f"[green]Summary 已保存: "
+        f"{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+    )
+
+    # 4. 展示结果
+    if output_format == "json":
+        console.print_json(result.model_dump_json(indent=2))
     else:
-        preprocessed = preprocess_audio(
-            audio, sample_rate=settings.asr_sample_rate)
-        asr_input = preprocessed
-
-    try:
-        asr = ASRClient()
-        transcript = asyncio.run(asr.transcribe(asr_input))
-
-        processor = TextProcessor()
-        cleaned = processor.clean(transcript)
-
-        console.print("\n[bold]转写结果:[/bold]")
-        console.print(cleaned.formatted_text)
-    finally:
-        if preprocessed and preprocessed.exists():
-            preprocessed.unlink()
+        console.print(Markdown(output_text))
 
 
 if __name__ == "__main__":

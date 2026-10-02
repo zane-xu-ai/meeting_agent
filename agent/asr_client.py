@@ -134,7 +134,8 @@ class ASRClient:
             access_key_id = policy_data.get("oss_access_key_id", "")
             signature = policy_data.get("signature", "")
             x_oss_object_acl = policy_data.get("x_oss_object_acl", "")
-            x_oss_forbid_overwrite = policy_data.get("x_oss_forbid_overwrite", "")
+            x_oss_forbid_overwrite = policy_data.get(
+                "x_oss_forbid_overwrite", "")
 
             if not upload_host:
                 raise RuntimeError(f"获取上传策略失败: {policy_data}")
