@@ -3,7 +3,8 @@ data/
 model/
 log/
 logs/
-tmp/
+output/
+*.preprocessed.wav
 .DS_Store
 .idea
 __pycache__/
@@ -16,6 +17,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 develop-eggs/
+tmp/
 dist/
 downloads/
 eggs/

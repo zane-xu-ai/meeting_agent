@@ -1,0 +1,132 @@
+"""会议助手 - LLM 调用封装 (OpenAI 兼容接口)"""
+
+from __future__ import annotations
+
+import json
+import re
+
+import httpx
+from loguru import logger
+
+from config import settings
+
+
+class LLMClient:
+    """LLM 客户端，使用 OpenAI 兼容接口"""
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+    ):
+        self.api_key = api_key or settings.llm_api_key
+        self.base_url = (base_url or settings.llm_base_url).rstrip("/")
+        self.model = model or settings.llm_model
+
+        if not self.api_key:
+            raise ValueError(
+                "请配置 LLM API Key: 设置 DASHSCOPE_API_KEY(ASR+LLM 共用) "
+                "或单独设置 LLM_API_KEY，可在 .env 文件或环境变量中设置"
+            )
+
+        self.chat_url = f"{self.base_url}/chat/completions"
+        logger.info(
+            f"LLM 客户端初始化: model={self.model}, base_url={self.base_url}")
+
+    async def chat(
+        self,
+        prompt: str,
+        system: str = "你是一名专业的会议纪要助手，擅长从会议记录中提取关键信息。",
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> str:
+        """
+        发送单轮对话请求。
+
+        Args:
+            prompt: 用户 prompt
+            system: 系统 prompt
+            temperature: 温度参数
+            max_tokens: 最大输出 token 数
+
+        Returns:
+            模型输出文本
+        """
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            logger.debug(f"调用 LLM: {self.model}")
+            resp = await client.post(self.chat_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            result = resp.json()
+
+        content = result["choices"][0]["message"]["content"]
+        usage = result.get("usage", {})
+        logger.info(
+            f"LLM 响应: prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"completion_tokens={usage.get('completion_tokens', '?')}"
+        )
+        return content
+
+    async def chat_json(
+        self,
+        prompt: str,
+        system: str = "你是一名专业的会议纪要助手，擅长从会议记录中提取关键信息。请始终返回有效的 JSON。",
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> dict:
+        """
+        发送对话请求并解析 JSON 输出。
+
+        会自动从模型输出中提取 JSON 块(支持 markdown code block 包裹)。
+        """
+        content = await self.chat(
+            prompt=prompt,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return self._extract_json(content)
+
+    @staticmethod
+    def _extract_json(text: str) -> dict:
+        """从模型输出中提取 JSON(支持 markdown code block)"""
+        # 尝试直接解析
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # 尝试从 ```json ... ``` 中提取
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+
+        # 尝试找到第一个 { 和最后一个 } 之间的内容
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                return json.loads(text[start: end + 1])
+            except json.JSONDecodeError:
+                pass
+
+        logger.warning(f"无法从 LLM 输出中解析 JSON，原始输出:\n{text[:500]}")
+        raise ValueError("LLM 输出无法解析为 JSON")
