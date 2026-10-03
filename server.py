@@ -28,6 +28,7 @@ def _content_disposition(filename: str) -> str:
 
 # ── FastAPI App ──────────────────────────────────────────────
 
+
 app = FastAPI(title="会议助手智能体")
 
 app.add_middleware(
@@ -107,11 +108,12 @@ def _process_audio(task_id: str, file_path: Path):
         _update(task_id, step="正在预处理音频...", progress=10)
 
         # 1. 预处理
+        _update(task_id, step="正在预处理音频...", progress=15)
         preprocessed = preprocess_audio(
             file_path, sample_rate=settings.asr_sample_rate)
 
         # 2. ASR
-        _update(task_id, step="正在语音转写...", progress=20)
+        _update(task_id, step="正在语音转写...", progress=35)
         asr = ASRClient()
         t0 = time.time()
         transcript = asyncio.run(asr.transcribe(str(preprocessed)))
@@ -494,7 +496,7 @@ def _process_audio_url(task_id: str, url: str):
         from models.schemas import MeetingResult
 
         audio_stem = get_audio_stem(url)
-        _update(task_id, step="正在语音转写...", progress=20)
+        _update(task_id, step="正在语音转写...", progress=35)
 
         asr = ASRClient()
         t0 = time.time()
