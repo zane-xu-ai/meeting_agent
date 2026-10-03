@@ -17,6 +17,30 @@
     }
 
     :root {
+      /* ── Light Theme (default) ── */
+      --bg-primary: #f5f6fa;
+      --bg-secondary: #edeef4;
+      --bg-card: #ffffff;
+      --bg-hover: #e4e6ee;
+      --border: #dcdfe8;
+      --border-light: #c8ccd8;
+      --text-primary: #1a1d2b;
+      --text-secondary: #5c6175;
+      --text-muted: #8b90a0;
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-glow: rgba(99, 102, 241, 0.1);
+      --success: #16a34a;
+      --success-bg: rgba(22, 163, 74, 0.08);
+      --warning: #d97706;
+      --warning-bg: rgba(217, 119, 6, 0.08);
+      --error: #dc2626;
+      --error-bg: rgba(220, 38, 38, 0.06);
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    [data-theme="dark"] {
       --bg-primary: #0b0d13;
       --bg-secondary: #11141b;
       --bg-card: #171b25;
@@ -35,8 +59,6 @@
       --warning-bg: rgba(245, 158, 11, 0.1);
       --error: #ef4444;
       --error-bg: rgba(239, 68, 68, 0.1);
-      --radius: 12px;
-      --radius-sm: 8px;
     }
 
     body {
@@ -46,6 +68,7 @@
       min-height: 100vh;
       line-height: 1.6;
       -webkit-font-smoothing: antialiased;
+      transition: background 0.3s ease, color 0.3s ease;
     }
 
     /* ── Layout ─────────────────────────────── */
@@ -116,6 +139,42 @@
     .health-text {
       font-size: 12px;
       color: var(--text-muted);
+    }
+
+    /* ── Theme Toggle ───────────────────────── */
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .theme-toggle {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      border: 1px solid var(--border);
+      background: var(--bg-secondary);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.25s ease;
+      color: var(--text-secondary);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: var(--accent-glow);
+      transform: rotate(15deg);
+    }
+
+    .theme-toggle svg {
+      width: 18px;
+      height: 18px;
+      transition: transform 0.3s ease;
     }
 
     /* ── Upload Zone ────────────────────────── */
@@ -478,8 +537,15 @@
     }
 
     @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.5; }
+
+      0%,
+      100% {
+        opacity: 1;
+      }
+
+      50% {
+        opacity: 0.5;
+      }
     }
 
     @keyframes pulse {
@@ -661,24 +727,41 @@
 
     /* ── Result Tabs ───────────────────────── */
     .result-tabs {
-      display: flex; gap: 0;
+      display: flex;
+      gap: 0;
       background: var(--bg-secondary);
       border-bottom: 1px solid var(--border);
       padding: 0 28px;
     }
+
     .result-tab {
-      padding: 12px 20px; border: none; background: transparent;
-      color: var(--text-secondary); font-size: 14px; font-weight: 500;
-      cursor: pointer; transition: all 0.2s;
+      padding: 12px 20px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
       border-bottom: 2px solid transparent;
-      display: flex; align-items: center; gap: 6px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    .result-tab:hover { color: var(--text-primary); }
+
+    .result-tab:hover {
+      color: var(--text-primary);
+    }
+
     .result-tab.active {
       color: var(--accent);
       border-bottom-color: var(--accent);
     }
-    .result-tab svg { width: 15px; height: 15px; }
+
+    .result-tab svg {
+      width: 15px;
+      height: 15px;
+    }
 
     .asr-content {
       font-size: 14px;
@@ -690,9 +773,18 @@
       padding: 4px;
     }
 
-    .asr-content::-webkit-scrollbar { width: 6px; }
-    .asr-content::-webkit-scrollbar-track { background: transparent; }
-    .asr-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .asr-content::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .asr-content::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .asr-content::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 3px;
+    }
 
     /* ── Error ──────────────────────────────── */
     .error-card {
@@ -788,9 +880,19 @@
           <p>智能音视频分析 · 自动生成结构化总结</p>
         </div>
       </div>
-      <div style="display:flex;align-items:center;gap:6px;">
-        <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
-        <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
+      <div class="header-right">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
+          <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
+        </div>
+        <button class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
+          <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
       </div>
     </header>
 
@@ -963,12 +1065,25 @@
           </div>
         </div>
         <div class="result-tabs">
-          <button class="result-tab" :class="{ active: activeResultTab === 'analysis' }" @click="activeResultTab = 'analysis'">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+          <button class="result-tab" :class="{ active: activeResultTab === 'analysis' }"
+            @click="activeResultTab = 'analysis'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+            </svg>
             分析报告
           </button>
           <button class="result-tab" :class="{ active: activeResultTab === 'asr' }" @click="switchToAsr">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
+              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+              <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+              <line x1="12" y1="19" x2="12" y2="23" />
+              <line x1="8" y1="23" x2="16" y2="23" />
+            </svg>
             ASR 转写
           </button>
         </div>
@@ -1011,6 +1126,7 @@
         const inputUrl = ref('');
         const activeResultTab = ref('analysis'); // analysis | asr
         const asrText = ref('');
+        const isDark = ref(false);
 
         const task = reactive({
           task_id: '', filename: '', file_type: '', progress: 0,
@@ -1246,15 +1362,32 @@
           resetSteps();
         }
 
+        // ── Theme ──
+        function applyTheme(dark) {
+          document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+          isDark.value = dark;
+          try { localStorage.setItem('meeting-agent-theme', dark ? 'dark' : 'light'); } catch {}
+        }
+
+        function toggleTheme() {
+          applyTheme(!isDark.value);
+        }
+
+        function initTheme() {
+          let saved = null;
+          try { saved = localStorage.getItem('meeting-agent-theme'); } catch {}
+          applyTheme(saved === 'dark');
+        }
+
         // ── Lifecycle ──
-        onMounted(() => { checkHealth(); });
+        onMounted(() => { initTheme(); checkHealth(); });
         onUnmounted(() => { clearInterval(pollTimer); stopStepTimer(); });
 
         return {
           phase, isDragging, apiOk, copied, task, steps, acceptExts,
-          renderedMd, resultMd, inputMode, inputUrl, activeResultTab, asrText,
+          renderedMd, resultMd, inputMode, inputUrl, activeResultTab, asrText, isDark,
           onDrop, onFileSelect, submitUrl, downloadResult, copyResult, resetAll,
-          formatTime, switchToAsr, downloadAsr,
+          formatTime, switchToAsr, downloadAsr, toggleTheme,
         };
       }
     }).mount('#app');

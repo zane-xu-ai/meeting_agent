@@ -9,6 +9,7 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +18,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
+
+
+def _content_disposition(filename: str) -> str:
+    """生成兼容中文文件名的 Content-Disposition 头 (RFC 5987)"""
+    ascii_name = filename.encode("ascii", "replace").decode("ascii")
+    utf8_name = quote(filename)
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
 
 # ── FastAPI App ──────────────────────────────────────────────
 
@@ -582,7 +590,7 @@ async def download_result(task_id: str):
         raise HTTPException(404, "结果文件不存在")
     text = Path(rp).read_text(encoding="utf-8")
     return PlainTextResponse(text, media_type="text/markdown",
-                             headers={"Content-Disposition": f'attachment; filename="{Path(rp).name}"'})
+                             headers={"Content-Disposition": _content_disposition(Path(rp).name)})
 
 
 @app.get("/api/asr/{task_id}")
@@ -613,7 +621,7 @@ async def download_asr_result(task_id: str):
         raise HTTPException(404, "ASR 结果不存在")
     text = Path(asr_path).read_text(encoding="utf-8")
     return PlainTextResponse(text, media_type="text/plain",
-                             headers={"Content-Disposition": f'attachment; filename="{Path(asr_path).name}"'})
+                             headers={"Content-Disposition": _content_disposition(Path(asr_path).name)})
 
 
 @app.get("/api/health")
