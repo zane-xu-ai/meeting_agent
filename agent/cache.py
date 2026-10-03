@@ -27,6 +27,24 @@ _TYPE_TO_SUBDIR = {
 }
 
 
+def sanitize_stem(title: str) -> str:
+    """
+    将标题清洗为安全的文件名 stem。
+
+    去除文件系统不安全字符，截断过长标题。
+    """
+    import re
+    # 去除文件系统不安全字符
+    unsafe = r'[\\/:*?"<>|]'
+    cleaned = re.sub(unsafe, '', title)
+    # 合并连续空白
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # 截断过长标题
+    if len(cleaned) > 80:
+        cleaned = cleaned[:80].rstrip()
+    return cleaned
+
+
 def get_audio_stem(audio_source: str) -> str:
     """
     从音频路径或 URL 中提取文件名(不含后缀)。

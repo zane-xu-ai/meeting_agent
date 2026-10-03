@@ -150,14 +150,14 @@ class MeetingPipeline:
 
     async def _segmented_analysis(self, transcript: Transcript) -> MeetingResult:
         """
-        分段分析策略:
-        1. 按 5 分钟窗口切片
+        分段分析策略 (滑动窗口):
+        1. 按 5 分钟窗口切片，相邻片段重叠 3 句
         2. 每个切片分别调 LLM 生成局部摘要
         3. 合并所有局部摘要，再调一次 LLM 生成全局结果
         """
-        # 切片
+        # 切片 (带重叠)
         chunks = self.text_processor.chunk_by_time(
-            transcript, window_minutes=5)
+            transcript, window_minutes=5, overlap_sentences=3)
 
         if len(chunks) <= 1:
             return await self._single_analysis(transcript.formatted_text)
@@ -195,19 +195,93 @@ async def analyze_interview(
     """
     面试录音分析: 调用 LLM 获取问题和评分的原始 JSON 数据。
 
+    长文本采用分段提取 + 合并策略 (滑动窗口)。
+
     Returns:
         {"q_data": {...}, "a_data": {...}} 两份原始 JSON 数据
     """
-    llm = LLMClient()
+    from agent.text_processor import TextProcessor
 
-    # 1. 提取问题
+    llm = LLMClient()
+    estimated_tokens = len(transcript_text) // 2
+
+    if estimated_tokens <= settings.max_tokens_per_chunk:
+        # 短文本: 直接整体分析
+        return await _interview_single(llm, transcript_text)
+
+    # 长文本: 分段提取问题 + 合并分析
+    logger.info(
+        f"面试文本较长 (~{estimated_tokens} tokens)，采用分段提取策略"
+    )
+    return await _interview_segmented(llm, transcript_text)
+
+
+async def _interview_single(llm: LLMClient, transcript_text: str) -> dict:
+    """面试整体分析 (短文本)"""
     logger.info("面试分析 [1/2]: 提取面试官问题...")
     q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=transcript_text)
     q_data = await llm.chat_json(q_prompt)
 
-    # 2. 逐题分析评分 (输出较长，需要更大的 max_tokens)
     logger.info("面试分析 [2/2]: 逐题分析评分...")
     a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=transcript_text)
+    a_data = await llm.chat_json(a_prompt, max_tokens=16384)
+
+    return {"q_data": q_data, "a_data": a_data}
+
+
+async def _interview_segmented(llm: LLMClient, transcript_text: str) -> dict:
+    """
+    面试分段分析 (滑动窗口):
+    1. 按句子边界切片，相邻片段重叠 3 句
+    2. 每个片段分别提取问题
+    3. 合并去重所有问题
+    4. 对合并后的问题列表统一分析
+    """
+    from agent.text_processor import TextProcessor
+
+    processor = TextProcessor()
+    chunks = processor.chunk_by_sentences(
+        transcript_text, chunk_size=3000, overlap_sentences=3)
+
+    # Step 1: 每个片段提取问题
+    all_questions = []
+    seen_questions = set()
+    for i, chunk in enumerate(chunks):
+        logger.info(f"面试分段提取 [片段 {i + 1}/{len(chunks)}]...")
+        q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=chunk)
+        try:
+            q_data = await llm.chat_json(q_prompt)
+            for q in q_data.get("questions", []):
+                # 简单去重: 按问题文本前 20 字去重
+                q_key = q.get("question", "")[:20]
+                if q_key and q_key not in seen_questions:
+                    seen_questions.add(q_key)
+                    all_questions.append(q)
+        except Exception as e:
+            logger.warning(f"片段 {i + 1} 问题提取失败: {e}")
+
+    if not all_questions:
+        raise ValueError("所有分段均未提取到面试问题")
+
+    # 重新编号
+    for i, q in enumerate(all_questions, 1):
+        q["id"] = i
+
+    logger.info(f"合并去重后共 {len(all_questions)} 个问题")
+    q_data = {"questions": all_questions}
+
+    # Step 2: 用合并后的问题列表 + 全文进行分析
+    # 将问题列表注入文本开头，引导 LLM 按问题顺序分析
+    question_list = "\n".join(
+        f"{i + 1}. {q['question']}" for i, q in enumerate(all_questions)
+    )
+    guided_transcript = (
+        f"## 已提取的面试问题列表\n{question_list}\n\n"
+        f"## 面试转写原文\n{transcript_text}"
+    )
+
+    logger.info("面试分析 [2/2]: 逐题分析评分...")
+    a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=guided_transcript)
     a_data = await llm.chat_json(a_prompt, max_tokens=16384)
 
     return {"q_data": q_data, "a_data": a_data}
@@ -343,14 +417,13 @@ async def _segmented_general(
     transcript_text: str,
     llm: LLMClient,
 ) -> dict:
-    """通用录音的分段分析"""
+    """通用录音的分段分析 (滑动窗口)"""
     from agent.text_processor import TextProcessor
 
     processor = TextProcessor()
-    # 简单按字符数切片(每 ~3000 字一段)
-    chunk_size = 3000
-    chunks = [transcript_text[i:i + chunk_size]
-              for i in range(0, len(transcript_text), chunk_size)]
+    # 按句子边界切片，相邻片段重叠 3 句
+    chunks = processor.chunk_by_sentences(
+        transcript_text, chunk_size=3000, overlap_sentences=3)
 
     if len(chunks) <= 1:
         prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)

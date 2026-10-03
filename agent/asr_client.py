@@ -79,6 +79,9 @@ class ASRClient:
         headers = {**self._headers(), "Content-Type": "application/json"}
         # DashScope 异步任务需要设置 X-DashScope-Async: enable
         headers["X-DashScope-Async"] = "enable"
+        # 如果音频 URL 是 oss:// 前缀 (DashScope 临时存储), 需要此头
+        if audio_url.startswith("oss://"):
+            headers["X-DashScope-OssResourceResolve"] = "enable"
 
         async with httpx.AsyncClient(timeout=300.0) as client:
             logger.info("提交转写任务到 DashScope...")
@@ -106,30 +109,33 @@ class ASRClient:
 
     async def _upload_file(self, audio_path: Path) -> str:
         """
-        上传本地文件到 DashScope 临时存储，返回可访问的 OSS URL。
+        上传本地文件到 DashScope 临时 OSS 存储，返回 oss:// URL。
 
         流程:
-        1. 获取上传策略 (getPolicy)
+        1. GET 获取上传策略 (getPolicy)
         2. 上传文件到 OSS
-        3. 获取文件 URL (getFileUrl)
-        """
-        import asyncio
+        3. 返回 oss:// 临时 URL (48h 有效)
 
+        注意: 使用 oss:// URL 调用 ASR 时需添加
+              X-DashScope-OssResourceResolve: enable 请求头
+        """
         headers = self._headers()
 
         async with httpx.AsyncClient(timeout=120.0) as client:
-            # Step 1: 获取上传策略
+            # Step 1: GET 获取上传策略
             logger.debug("获取 DashScope 上传策略...")
-            resp = await client.post(
+            resp = await client.get(
                 self.UPLOAD_URL,
-                json={"action": "getPolicy", "model": self.model},
-                headers={**headers, "Content-Type": "application/json"},
+                params={"action": "getPolicy", "model": self.model},
+                headers=headers,
             )
             resp.raise_for_status()
-            policy_data = resp.json().get("data", {})
+            raw = resp.json()
+            # DashScope 返回结构可能是 {"data": {...}} 或直接 {...}
+            policy_data = raw.get("data") or raw
 
-            upload_host = policy_data.get("host", "")
-            upload_dir = policy_data.get("dir", "")
+            upload_host = policy_data.get("host", "") or policy_data.get("upload_host", "")
+            upload_dir = policy_data.get("dir", "") or policy_data.get("upload_dir", "")
             policy = policy_data.get("policy", "")
             access_key_id = policy_data.get("oss_access_key_id", "")
             signature = policy_data.get("signature", "")
@@ -162,26 +168,10 @@ class ASRClient:
                         f"上传文件到 OSS 失败: {resp.status_code} {resp.text}"
                     )
 
-            # Step 3: 获取文件 URL
-            logger.debug("获取文件临时访问 URL...")
-            resp = await client.post(
-                self.UPLOAD_URL,
-                json={
-                    "action": "getFileUrl",
-                    "model": self.model,
-                    "file_id": oss_key,
-                },
-                headers={**headers, "Content-Type": "application/json"},
-            )
-            resp.raise_for_status()
-            file_url_data = resp.json().get("data", {})
-            audio_url = file_url_data.get("url", "")
-
-            if not audio_url:
-                raise RuntimeError(f"获取文件 URL 失败: {file_url_data}")
-
-            logger.info(f"文件上传成功，获取临时 URL")
-            return audio_url
+            # Step 3: 返回 oss:// 临时 URL (无需 getFileUrl 步骤)
+            oss_url = f"oss://{oss_key}"
+            logger.info(f"文件上传成功，获取临时 OSS URL")
+            return oss_url
 
     async def _poll_task(
         self,
