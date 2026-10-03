@@ -26,6 +26,47 @@ from models.schemas import MeetingResult, Transcript
 from utils.audio import preprocess_audio
 
 
+def _build_meta_block(
+    event_time: str | None = None,
+    timing_info: dict | None = None,
+) -> list[str]:
+    """
+    构建文档头部的元数据信息块。
+
+    Args:
+        event_time: 事件时间(会议/面试时间)，来自音频文件修改时间
+        timing_info: 耗时信息 {generation_time, asr_duration, llm_duration, total_duration}
+    """
+    lines = []
+    gen_time = (timing_info or {}).get("generation_time", "")
+
+    parts = []
+    if event_time:
+        parts.append(f"事件时间: {event_time}")
+    if gen_time:
+        parts.append(f"生成时间: {gen_time}")
+    if parts:
+        lines.append("> " + " | ".join(parts))
+
+    if timing_info:
+        asr_d = timing_info.get("asr_duration")
+        llm_d = timing_info.get("llm_duration")
+        total_d = timing_info.get("total_duration")
+        timing_parts = []
+        if asr_d is not None:
+            timing_parts.append(f"ASR 耗时: {asr_d:.1f}s")
+        if llm_d is not None:
+            timing_parts.append(f"LLM 耗时: {llm_d:.1f}s")
+        if total_d is not None:
+            timing_parts.append(f"总耗时: {total_d:.1f}s")
+        if timing_parts:
+            lines.append("> " + " | ".join(timing_parts))
+
+    if lines:
+        lines.append("")  # 空行分隔
+    return lines
+
+
 class MeetingPipeline:
     """会议处理流水线: 音频 -> 转写 -> 预处理 -> LLM 分析 -> 结构化输出"""
 
@@ -148,12 +189,14 @@ class MeetingPipeline:
 
 # ---------- 面试录音分析 ----------
 
-async def analyze_interview(transcript_text: str) -> dict[str, str]:
+async def analyze_interview(
+    transcript_text: str,
+) -> dict:
     """
-    面试录音分析: 生成 question.md 和 analyze.md。
+    面试录音分析: 调用 LLM 获取问题和评分的原始 JSON 数据。
 
     Returns:
-        {"question": "...", "analyze": "..."} 两份 Markdown 文本
+        {"q_data": {...}, "a_data": {...}} 两份原始 JSON 数据
     """
     llm = LLMClient()
 
@@ -161,23 +204,26 @@ async def analyze_interview(transcript_text: str) -> dict[str, str]:
     logger.info("面试分析 [1/2]: 提取面试官问题...")
     q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=transcript_text)
     q_data = await llm.chat_json(q_prompt)
-    question_md = format_interview_questions(q_data)
 
     # 2. 逐题分析评分 (输出较长，需要更大的 max_tokens)
     logger.info("面试分析 [2/2]: 逐题分析评分...")
     a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=transcript_text)
     a_data = await llm.chat_json(a_prompt, max_tokens=16384)
-    analyze_md = format_interview_analysis(a_data)
 
-    return {"question": question_md, "analyze": analyze_md}
+    return {"q_data": q_data, "a_data": a_data}
 
 
-def format_interview_questions(data: dict) -> str:
+def format_interview_questions(
+    data: dict,
+    event_time: str | None = None,
+    timing_info: dict | None = None,
+) -> str:
     """将面试问题 JSON 格式化为 Markdown"""
     lines = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines.append(f"# 面试问题列表 - {now}")
+    title_suffix = event_time or datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append(f"# 面试问题列表 - {title_suffix}")
     lines.append("")
+    lines.extend(_build_meta_block(event_time, timing_info))
 
     questions = data.get("questions", [])
     if not questions:
@@ -200,12 +246,17 @@ def format_interview_questions(data: dict) -> str:
     return "\n".join(lines)
 
 
-def format_interview_analysis(data: dict) -> str:
+def format_interview_analysis(
+    data: dict,
+    event_time: str | None = None,
+    timing_info: dict | None = None,
+) -> str:
     """将面试分析 JSON 格式化为 Markdown"""
     lines = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines.append(f"# 面试分析报告 - {now}")
+    title_suffix = event_time or datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append(f"# 面试分析报告 - {title_suffix}")
     lines.append("")
+    lines.extend(_build_meta_block(event_time, timing_info))
 
     # 总结放在最上面
     overall_summary = data.get("overall_summary", "")
@@ -267,12 +318,14 @@ def format_interview_analysis(data: dict) -> str:
 
 # ---------- 通用录音分析 ----------
 
-async def analyze_general(transcript_text: str) -> str:
+async def analyze_general(
+    transcript_text: str,
+) -> dict:
     """
-    通用录音分析: 摘要、章节、关键词等。
+    通用录音分析: 调用 LLM 获取原始 JSON 数据。
 
     Returns:
-        Markdown 格式的总结文本
+        原始 JSON 数据 dict
     """
     llm = LLMClient()
     estimated_tokens = len(transcript_text) // 2
@@ -280,14 +333,16 @@ async def analyze_general(transcript_text: str) -> str:
     if estimated_tokens <= settings.max_tokens_per_chunk:
         logger.info(f"通用分析: 文本较短 (~{estimated_tokens} tokens)，整体分析")
         prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
-        data = await llm.chat_json(prompt)
-        return format_general_result(data)
+        return await llm.chat_json(prompt)
     else:
         logger.info(f"通用分析: 文本较长 (~{estimated_tokens} tokens)，分段分析")
         return await _segmented_general(transcript_text, llm)
 
 
-async def _segmented_general(transcript_text: str, llm: LLMClient) -> str:
+async def _segmented_general(
+    transcript_text: str,
+    llm: LLMClient,
+) -> dict:
     """通用录音的分段分析"""
     from agent.text_processor import TextProcessor
 
@@ -299,8 +354,7 @@ async def _segmented_general(transcript_text: str, llm: LLMClient) -> str:
 
     if len(chunks) <= 1:
         prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
-        data = await llm.chat_json(prompt)
-        return format_general_result(data)
+        return await llm.chat_json(prompt)
 
     segment_results = []
     for i, chunk in enumerate(chunks):
@@ -320,16 +374,20 @@ async def _segmented_general(transcript_text: str, llm: LLMClient) -> str:
         f"### 片段 {i + 1}\n{s}" for i, s in enumerate(segment_results)
     )
     merge_prompt = GENERAL_MERGE_PROMPT.format(summaries=combined)
-    data = await llm.chat_json(merge_prompt)
-    return format_general_result(data)
+    return await llm.chat_json(merge_prompt)
 
 
-def format_general_result(data: dict) -> str:
+def format_general_result(
+    data: dict,
+    event_time: str | None = None,
+    timing_info: dict | None = None,
+) -> str:
     """将通用分析 JSON 格式化为 Markdown"""
     lines = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines.append(f"# 内容分析总结 - {now}")
+    title_suffix = event_time or datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append(f"# 内容分析总结 - {title_suffix}")
     lines.append("")
+    lines.extend(_build_meta_block(event_time, timing_info))
 
     # 摘要
     summary = data.get("summary", "")
@@ -379,13 +437,19 @@ def format_general_result(data: dict) -> str:
 
 # ---------- 格式化函数 (保留会议) ----------
 
-def format_markdown(result: MeetingResult, title: str = "会议纪要") -> str:
+def format_markdown(
+    result: MeetingResult,
+    title: str = "会议纪要",
+    event_time: str | None = None,
+    timing_info: dict | None = None,
+) -> str:
     """将 MeetingResult 格式化为 Markdown 输出"""
     lines = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    title_suffix = event_time or datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    lines.append(f"# {title} - {now}")
+    lines.append(f"# {title} - {title_suffix}")
     lines.append("")
+    lines.extend(_build_meta_block(event_time, timing_info))
 
     # 参会人
     if result.participants:

@@ -102,7 +102,8 @@ def load_summary_cache(
     """
     尝试加载 Summary 缓存 (会议/通用)。命中返回 Markdown 文本，未命中返回 None。
     """
-    cache_path = _summary_cache_path(audio_stem, rec_type, asr_model, llm_model)
+    cache_path = _summary_cache_path(
+        audio_stem, rec_type, asr_model, llm_model)
     if cache_path.exists():
         logger.info(f"[缓存命中] Summary 结果: {cache_path}")
         return cache_path.read_text(encoding="utf-8")
@@ -117,7 +118,8 @@ def save_summary_cache(
     llm_model: str | None = None,
 ) -> Path:
     """保存 Summary 结果到缓存 (会议/通用类型)"""
-    cache_path = _summary_cache_path(audio_stem, rec_type, asr_model, llm_model)
+    cache_path = _summary_cache_path(
+        audio_stem, rec_type, asr_model, llm_model)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(markdown_text, encoding="utf-8")
     logger.info(f"[缓存保存] Summary 结果: {cache_path}")

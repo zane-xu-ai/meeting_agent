@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 import typer
@@ -49,13 +51,36 @@ app = typer.Typer(
 console = Console()
 
 
+# ---------- 公共: 获取音频文件时间 ----------
+
+def get_event_time(audio_source: str) -> str | None:
+    """
+    获取音频文件的事件时间(文件修改时间)。
+
+    本地文件: 返回文件修改时间字符串
+    URL: 返回 None(无法获取)
+    """
+    if audio_source.startswith(("http://", "https://")):
+        return None
+    try:
+        path = Path(audio_source)
+        if path.exists():
+            mtime = path.stat().st_mtime
+            return datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        pass
+    return None
+
+
 # ---------- 公共: 获取 ASR 转写文本 (带缓存) ----------
 
-async def _get_transcript_text(audio_source: str, audio_stem: str) -> tuple[str, bool]:
+async def _get_transcript_text(
+    audio_source: str, audio_stem: str
+) -> tuple[str, bool, float]:
     """
     获取 ASR 转写文本，优先使用缓存。
 
-    返回: (转写文本, is_from_cache: bool)
+    返回: (转写文本, is_from_cache: bool, asr_duration: float)
     """
     from agent.asr_client import ASRClient
     from utils.audio import preprocess_audio
@@ -65,7 +90,7 @@ async def _get_transcript_text(audio_source: str, audio_stem: str) -> tuple[str,
     if cached is not None:
         console.print(
             f"[green]使用 ASR 缓存: {audio_stem}_{settings.asr_model}.txt[/green]")
-        return cached, True
+        return cached, True, 0.0
 
     # 2. 缓存未命中，执行 ASR 转写
     is_url = audio_source.startswith(("http://", "https://"))
@@ -77,12 +102,14 @@ async def _get_transcript_text(audio_source: str, audio_stem: str) -> tuple[str,
             audio_source, sample_rate=settings.asr_sample_rate)
         asr_input = preprocessed
 
+    t0 = time.time()
     try:
         asr = ASRClient()
         transcript = await asr.transcribe(asr_input)
     finally:
         if preprocessed and preprocessed.exists():
             preprocessed.unlink()
+    asr_duration = time.time() - t0
 
     # 3. 文本预处理
     processor = TextProcessor()
@@ -94,7 +121,7 @@ async def _get_transcript_text(audio_source: str, audio_stem: str) -> tuple[str,
     console.print(
         f"[green]ASR 结果已保存: {audio_stem}_{settings.asr_model}.txt[/green]")
 
-    return transcript_text, False
+    return transcript_text, False, asr_duration
 
 
 # ---------- transcript-only 命令 ----------
@@ -114,7 +141,7 @@ def transcript_only(
 
     console.print(f"[bold]转写音频:[/bold] {display_name}")
 
-    transcript_text, from_cache = asyncio.run(
+    transcript_text, from_cache, asr_duration = asyncio.run(
         _get_transcript_text(audio, audio_stem))
 
     console.print("\n[bold]转写结果:[/bold]")
@@ -174,9 +201,13 @@ def analyze(
         )
     )
 
+    # 获取音频文件的事件时间
+    event_time = get_event_time(audio)
+    total_start = time.time()
+
     # 1. 获取 ASR 转写文本 (带缓存)
     logger.info("[1/3] ASR 语音转写...")
-    transcript_text, asr_from_cache = asyncio.run(
+    transcript_text, asr_from_cache, asr_duration = asyncio.run(
         _get_transcript_text(audio, audio_stem))
 
     if not transcript_text.strip():
@@ -193,16 +224,39 @@ def analyze(
 
     # 3. 根据类型路由到不同分析策略
     logger.info(f"[3/3] 开始分析 ({type_labels.get(rec_type, rec_type)})...")
+    llm_start = time.time()
 
     if rec_type == "interview":
-        _handle_interview(audio_stem, transcript_text)
+        _handle_interview(audio_stem, transcript_text, event_time, asr_duration, llm_start, total_start)
     elif rec_type == "meeting":
-        _handle_meeting(audio_stem, transcript_text, output_format)
+        _handle_meeting(audio_stem, transcript_text, output_format, event_time, asr_duration, llm_start, total_start)
     else:
-        _handle_general(audio_stem, transcript_text)
+        _handle_general(audio_stem, transcript_text, event_time, asr_duration, llm_start, total_start)
 
 
-def _handle_meeting(audio_stem: str, transcript_text: str, output_format: str):
+def _build_timing_info(
+    asr_duration: float, llm_start: float, total_start: float
+) -> dict:
+    """构建耗时信息字典"""
+    llm_duration = time.time() - llm_start
+    total_duration = time.time() - total_start
+    return {
+        "generation_time": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "asr_duration": asr_duration,
+        "llm_duration": llm_duration,
+        "total_duration": total_duration,
+    }
+
+
+def _handle_meeting(
+    audio_stem: str,
+    transcript_text: str,
+    output_format: str,
+    event_time: str | None,
+    asr_duration: float,
+    llm_start: float,
+    total_start: float,
+):
     """处理会议录音 -> output/summary/meeting/"""
     from agent.llm_client import LLMClient
     from agent.prompts import MEETING_ANALYSIS_PROMPT
@@ -223,7 +277,8 @@ def _handle_meeting(audio_stem: str, transcript_text: str, output_format: str):
     data = asyncio.run(llm.chat_json(prompt))
     result = MeetingResult.model_validate(data)
 
-    output_text = format_markdown(result)
+    timing_info = _build_timing_info(asr_duration, llm_start, total_start)
+    output_text = format_markdown(result, event_time=event_time, timing_info=timing_info)
     save_summary_cache(output_text, audio_stem, rec_type="meeting")
     console.print(
         f"[green]Summary 已保存: "
@@ -236,8 +291,17 @@ def _handle_meeting(audio_stem: str, transcript_text: str, output_format: str):
         console.print(Markdown(output_text))
 
 
-def _handle_interview(audio_stem: str, transcript_text: str):
+def _handle_interview(
+    audio_stem: str,
+    transcript_text: str,
+    event_time: str | None,
+    asr_duration: float,
+    llm_start: float,
+    total_start: float,
+):
     """处理面试录音 -> output/summary/interview/{name}_{asr}_{llm}/"""
+    from agent.pipeline import format_interview_analysis, format_interview_questions
+
     # 检查面试缓存
     cached = load_interview_cache(audio_stem)
     if cached is not None:
@@ -248,21 +312,38 @@ def _handle_interview(audio_stem: str, transcript_text: str):
         console.print(Markdown(cached["analyze"]))
         return
 
-    result = asyncio.run(analyze_interview(transcript_text))
+    # 执行分析，获取原始 JSON 数据
+    result_raw = asyncio.run(analyze_interview(transcript_text))
 
-    save_interview_cache(result["question"], result["analyze"], audio_stem)
+    # 分析完成后，构建耗时信息并格式化
+    timing_info = _build_timing_info(asr_duration, llm_start, total_start)
+    question_md = format_interview_questions(
+        result_raw["q_data"], event_time, timing_info)
+    analyze_md = format_interview_analysis(
+        result_raw["a_data"], event_time, timing_info)
+
+    save_interview_cache(question_md, analyze_md, audio_stem)
     subdir = f"interview/{audio_stem}_{settings.asr_model}_{settings.llm_model}"
     console.print(f"[green]面试分析已保存: {subdir}/question.md[/green]")
     console.print(f"[green]面试分析已保存: {subdir}/analyze.md[/green]")
 
     console.print("\n[bold]--- 面试问题列表 ---[/bold]")
-    console.print(Markdown(result["question"]))
+    console.print(Markdown(question_md))
     console.print("\n[bold]--- 面试分析报告 ---[/bold]")
-    console.print(Markdown(result["analyze"]))
+    console.print(Markdown(analyze_md))
 
 
-def _handle_general(audio_stem: str, transcript_text: str):
+def _handle_general(
+    audio_stem: str,
+    transcript_text: str,
+    event_time: str | None,
+    asr_duration: float,
+    llm_start: float,
+    total_start: float,
+):
     """处理通用录音 -> output/summary/other/"""
+    from agent.pipeline import format_general_result
+
     # 检查 Summary 缓存
     cached = load_summary_cache(audio_stem, rec_type="general")
     if cached is not None:
@@ -273,7 +354,13 @@ def _handle_general(audio_stem: str, transcript_text: str):
         console.print(Markdown(cached))
         return
 
-    output_text = asyncio.run(analyze_general(transcript_text))
+    # 执行分析，获取原始 JSON 数据
+    data = asyncio.run(analyze_general(transcript_text))
+
+    # 分析完成后，构建耗时信息并格式化
+    timing_info = _build_timing_info(asr_duration, llm_start, total_start)
+    output_text = format_general_result(data, event_time, timing_info)
+
     save_summary_cache(output_text, audio_stem, rec_type="general")
     console.print(
         f"[green]Summary 已保存: "
