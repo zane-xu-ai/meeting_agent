@@ -124,47 +124,127 @@
     }
 
     .tab-bar {
-      display: flex; gap: 0; margin-bottom: 20px;
-      background: var(--bg-secondary); border-radius: var(--radius-sm);
-      padding: 4px; border: 1px solid var(--border);
+      display: flex;
+      gap: 0;
+      margin-bottom: 20px;
+      background: var(--bg-secondary);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+      border: 1px solid var(--border);
     }
+
     .tab-btn {
-      flex: 1; padding: 10px 16px; border: none; border-radius: 6px;
-      background: transparent; color: var(--text-secondary);
-      font-size: 14px; font-weight: 500; cursor: pointer;
-      transition: all 0.2s; display: flex; align-items: center;
-      justify-content: center; gap: 8px;
+      flex: 1;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
     }
-    .tab-btn:hover { color: var(--text-primary); }
-    .tab-btn.active { background: var(--accent); color: #fff; box-shadow: 0 2px 8px var(--accent-glow); }
-    .tab-btn svg { width: 16px; height: 16px; }
+
+    .tab-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: #fff;
+      box-shadow: 0 2px 8px var(--accent-glow);
+    }
+
+    .tab-btn svg {
+      width: 16px;
+      height: 16px;
+    }
 
     .url-section {
-      background: var(--bg-secondary); border: 1px solid var(--border);
-      border-radius: var(--radius); padding: 28px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 28px;
     }
-    .url-label { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
-    .url-input-wrap { display: flex; gap: 10px; margin-bottom: 16px; }
+
+    .url-label {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 12px;
+    }
+
+    .url-input-wrap {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
     .url-input {
-      flex: 1; padding: 12px 16px; border-radius: var(--radius-sm);
-      background: var(--bg-card); border: 1px solid var(--border);
-      color: var(--text-primary); font-size: 14px; outline: none; transition: border-color 0.2s;
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
     }
-    .url-input:focus { border-color: var(--accent); }
-    .url-input::placeholder { color: var(--text-muted); }
+
+    .url-input:focus {
+      border-color: var(--accent);
+    }
+
+    .url-input::placeholder {
+      color: var(--text-muted);
+    }
+
     .url-submit {
-      padding: 12px 24px; border-radius: var(--radius-sm);
-      background: var(--accent); color: #fff; font-size: 14px; font-weight: 500;
-      border: none; cursor: pointer; transition: all 0.2s; white-space: nowrap;
-      display: flex; align-items: center; gap: 6px;
+      padding: 12px 24px;
+      border-radius: var(--radius-sm);
+      background: var(--accent);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      cursor: pointer;
+      transition: all 0.2s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
-    .url-submit:hover { background: var(--accent-hover); }
-    .url-hint { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
-    .url-platforms { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+
+    .url-submit:hover {
+      background: var(--accent-hover);
+    }
+
+    .url-hint {
+      font-size: 13px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .url-platforms {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
     .platform-tag {
-      font-size: 11px; padding: 3px 10px; border-radius: 20px;
-      background: var(--bg-card); border: 1px solid var(--border);
-      color: var(--text-muted); letter-spacing: 0.3px;
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      letter-spacing: 0.3px;
     }
 
     .upload-zone {
@@ -369,6 +449,7 @@
     .step-text {
       font-size: 14px;
       color: var(--text-secondary);
+      flex: 1;
     }
 
     .step.active .step-text {
@@ -377,6 +458,28 @@
 
     .step.done .step-text {
       color: var(--success);
+    }
+
+    .step-timer {
+      font-size: 12px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--text-muted);
+      min-width: 42px;
+      text-align: right;
+    }
+
+    .step.active .step-timer {
+      color: var(--accent);
+      animation: blink 1.5s step-end infinite;
+    }
+
+    .step.done .step-timer {
+      color: var(--text-muted);
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
     }
 
     @keyframes pulse {
@@ -556,6 +659,41 @@
       font-weight: 600;
     }
 
+    /* ── Result Tabs ───────────────────────── */
+    .result-tabs {
+      display: flex; gap: 0;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      padding: 0 28px;
+    }
+    .result-tab {
+      padding: 12px 20px; border: none; background: transparent;
+      color: var(--text-secondary); font-size: 14px; font-weight: 500;
+      cursor: pointer; transition: all 0.2s;
+      border-bottom: 2px solid transparent;
+      display: flex; align-items: center; gap: 6px;
+    }
+    .result-tab:hover { color: var(--text-primary); }
+    .result-tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+    .result-tab svg { width: 15px; height: 15px; }
+
+    .asr-content {
+      font-size: 14px;
+      line-height: 1.8;
+      color: var(--text-primary);
+      white-space: pre-wrap;
+      max-height: 600px;
+      overflow-y: auto;
+      padding: 4px;
+    }
+
+    .asr-content::-webkit-scrollbar { width: 6px; }
+    .asr-content::-webkit-scrollbar-track { background: transparent; }
+    .asr-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
     /* ── Error ──────────────────────────────── */
     .error-card {
       background: var(--error-bg);
@@ -661,11 +799,20 @@
       <!-- Tab Bar -->
       <div class="tab-bar">
         <button class="tab-btn" :class="{ active: inputMode === 'file' }" @click="inputMode = 'file'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
           上传文件
         </button>
         <button class="tab-btn" :class="{ active: inputMode === 'url' }" @click="inputMode = 'url'">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
           输入链接
         </button>
       </div>
@@ -685,7 +832,8 @@
           <div class="upload-title">拖拽音视频文件到此处</div>
           <div class="upload-hint">或点击选择文件</div>
           <button class="upload-btn" @click.stop="$refs.fileInput.click()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <polyline points="17 8 12 3 7 8" />
               <line x1="12" y1="3" x2="12" y2="15" />
@@ -711,15 +859,14 @@
         <div class="url-section">
           <div class="url-label">粘贴音视频链接，自动分析并生成总结</div>
           <div class="url-input-wrap">
-            <input
-              class="url-input"
-              v-model="inputUrl"
-              type="text"
+            <input class="url-input" v-model="inputUrl" type="text"
               placeholder="https://www.bilibili.com/video/BV... 或 https://www.youtube.com/watch?v=..."
-              @keyup.enter="submitUrl"
-            />
+              @keyup.enter="submitUrl" />
             <button class="url-submit" @click="submitUrl" :disabled="!inputUrl.trim()">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3" />
+              </svg>
               开始分析
             </button>
           </div>
@@ -760,6 +907,7 @@
               <span v-else>{{ i + 1 }}</span>
             </div>
             <div class="step-text">{{ s.label }}</div>
+            <div class="step-timer" v-if="s.state === 'active' || s.state === 'done'">{{ formatTime(s.elapsed) }}</div>
           </div>
         </div>
 
@@ -784,18 +932,27 @@
     <transition name="fade">
       <div v-if="phase === 'done'" class="result-card">
         <div class="result-header">
-          <div class="result-title">分析结果</div>
+          <div class="result-title">处理结果</div>
           <div class="result-actions">
-            <button class="btn-sm" @click="downloadResult">
+            <button class="btn-sm" v-if="activeResultTab === 'asr'" @click="downloadAsr">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="7 10 12 15 17 10" />
                 <line x1="12" y1="15" x2="12" y2="3" />
               </svg>
-              下载
+              下载转写
             </button>
-            <button class="btn-sm" @click="copyResult">
+            <button class="btn-sm" v-if="activeResultTab === 'analysis'" @click="downloadResult">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+              下载报告
+            </button>
+            <button class="btn-sm" v-if="activeResultTab === 'analysis'" @click="copyResult">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
@@ -805,8 +962,23 @@
             </button>
           </div>
         </div>
+        <div class="result-tabs">
+          <button class="result-tab" :class="{ active: activeResultTab === 'analysis' }" @click="activeResultTab = 'analysis'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            分析报告
+          </button>
+          <button class="result-tab" :class="{ active: activeResultTab === 'asr' }" @click="switchToAsr">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            ASR 转写
+          </button>
+        </div>
         <div class="result-body">
-          <div class="md-content" v-html="renderedMd"></div>
+          <div v-if="activeResultTab === 'analysis'">
+            <div class="md-content" v-html="renderedMd"></div>
+          </div>
+          <div v-if="activeResultTab === 'asr'">
+            <div class="asr-content">{{ asrText || '加载中...' }}</div>
+          </div>
         </div>
       </div>
     </transition>
@@ -837,6 +1009,8 @@
         const resultMd = ref('');
         const inputMode = ref('file'); // file | url
         const inputUrl = ref('');
+        const activeResultTab = ref('analysis'); // analysis | asr
+        const asrText = ref('');
 
         const task = reactive({
           task_id: '', filename: '', file_type: '', progress: 0,
@@ -844,11 +1018,11 @@
         });
 
         const steps = reactive([
-          { label: '上传文件', state: 'done' },
-          { label: '预处理', state: 'pending' },
-          { label: '语音转写', state: 'pending' },
-          { label: '智能分析', state: 'pending' },
-          { label: '生成报告', state: 'pending' },
+          { label: '上传文件', state: 'done', elapsed: 0 },
+          { label: '预处理', state: 'pending', elapsed: 0 },
+          { label: '语音转写', state: 'pending', elapsed: 0 },
+          { label: '智能分析', state: 'pending', elapsed: 0 },
+          { label: '生成报告', state: 'pending', elapsed: 0 },
         ]);
 
         const acceptExts = [
@@ -857,11 +1031,34 @@
         ].join(',');
 
         let pollTimer = null;
+        let stepTimer = null;
 
         const renderedMd = computed(() => {
           if (!resultMd.value) return '';
           return marked.parse(resultMd.value, { breaks: true });
         });
+
+        // ── Timer ──
+        function startStepTimer() {
+          stopStepTimer();
+          stepTimer = setInterval(() => {
+            for (const s of steps) {
+              if (s.state === 'active') {
+                s.elapsed++;
+              }
+            }
+          }, 1000);
+        }
+        function stopStepTimer() {
+          if (stepTimer) { clearInterval(stepTimer); stepTimer = null; }
+        }
+
+        function formatTime(sec) {
+          if (!sec && sec !== 0) return '';
+          const m = Math.floor(sec / 60);
+          const s = sec % 60;
+          return `${m}:${s.toString().padStart(2, '0')}`;
+        }
 
         // ── Health check ──
         async function checkHealth() {
@@ -981,18 +1178,45 @@
             const d = await r.json();
             resultMd.value = d.content || '';
             phase.value = 'done';
+            stopStepTimer();
           } catch (e) {
             phase.value = 'error';
             task.error = '获取结果失败: ' + e.message;
           }
         }
 
+        async function switchToAsr() {
+          activeResultTab.value = 'asr';
+          if (!asrText.value) {
+            try {
+              const r = await fetch(`${API}/api/asr/${task.task_id}`);
+              const d = await r.json();
+              asrText.value = d.content || '';
+            } catch {
+              asrText.value = 'ASR 结果加载失败';
+            }
+          }
+        }
+
+        async function downloadAsr() {
+          window.open(`${API}/api/asr/${task.task_id}/download`);
+        }
+
         // ── Steps helper ──
         function resetSteps() {
-          steps.forEach((s, i) => { s.state = i === 0 ? 'done' : 'pending'; });
+          steps.forEach((s, i) => { s.state = i === 0 ? 'done' : 'pending'; s.elapsed = 0; });
         }
         function setStepState(idx, state) {
-          if (idx >= 0 && idx < steps.length) steps[idx].state = state;
+          if (idx >= 0 && idx < steps.length) {
+            steps[idx].state = state;
+            // Start timer when a step becomes active
+            if (state === 'active') startStepTimer();
+            // Stop timer when step is done (check if no more active steps need it)
+            if (state === 'done') {
+              const hasActive = steps.some(s => s.state === 'active');
+              if (!hasActive) stopStepTimer();
+            }
+          }
         }
 
         // ── Actions ──
@@ -1010,10 +1234,13 @@
 
         function resetAll() {
           clearInterval(pollTimer);
+          stopStepTimer();
           phase.value = 'idle';
           isDragging.value = false;
           copied.value = false;
           resultMd.value = '';
+          asrText.value = '';
+          activeResultTab.value = 'analysis';
           inputUrl.value = '';
           Object.assign(task, { task_id: '', filename: '', file_type: '', progress: 0, step: '', error: null, video_title: null });
           resetSteps();
@@ -1021,12 +1248,13 @@
 
         // ── Lifecycle ──
         onMounted(() => { checkHealth(); });
-        onUnmounted(() => { clearInterval(pollTimer); });
+        onUnmounted(() => { clearInterval(pollTimer); stopStepTimer(); });
 
         return {
           phase, isDragging, apiOk, copied, task, steps, acceptExts,
-          renderedMd, resultMd, inputMode, inputUrl,
+          renderedMd, resultMd, inputMode, inputUrl, activeResultTab, asrText,
           onDrop, onFileSelect, submitUrl, downloadResult, copyResult, resetAll,
+          formatTime, switchToAsr, downloadAsr,
         };
       }
     }).mount('#app');

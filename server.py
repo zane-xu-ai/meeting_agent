@@ -43,6 +43,7 @@ class TaskStatus(BaseModel):
     step: str = ""
     error: str | None = None
     result_path: str | None = None
+    asr_result_path: str | None = None
     filename: str = ""
     file_type: str = ""  # audio / video
     video_title: str | None = None
@@ -123,7 +124,8 @@ def _process_audio(task_id: str, file_path: Path):
             return
 
         # 保存 ASR 缓存
-        save_asr_cache(transcript_text, audio_stem)
+        asr_path = save_asr_cache(transcript_text, audio_stem)
+        _update(task_id, asr_result_path=str(asr_path))
 
         # 3. 分类
         _update(task_id, step="正在识别录音类型...", progress=50)
@@ -240,7 +242,8 @@ def _process_video(task_id: str, file_path: Path):
             _update(task_id, status="failed", error="ASR 转写结果为空")
             return
 
-        save_asr_cache(transcript_text, video_stem)
+        asr_path = save_asr_cache(transcript_text, video_stem)
+        _update(task_id, asr_result_path=str(asr_path))
 
         # 5. LLM 分析
         _update(task_id, step="正在分析内容...", progress=65)
@@ -324,6 +327,7 @@ async def upload_file(file: UploadFile = File(...)):
             "step": "任务已创建",
             "error": None,
             "result_path": None,
+            "asr_result_path": None,
             "filename": file.filename or "",
             "file_type": file_type,
             "video_title": None,
@@ -370,15 +374,18 @@ async def submit_url(req: UrlRequest):
             "step": "任务已创建",
             "error": None,
             "result_path": None,
+            "asr_result_path": None,
             "filename": display_name,
             "file_type": file_type,
             "video_title": None,
         }
 
     if is_video:
-        threading.Thread(target=_process_video_url, args=(task_id, url), daemon=True).start()
+        threading.Thread(target=_process_video_url, args=(
+            task_id, url), daemon=True).start()
     else:
-        threading.Thread(target=_process_audio_url, args=(task_id, url), daemon=True).start()
+        threading.Thread(target=_process_audio_url, args=(
+            task_id, url), daemon=True).start()
 
     return {"task_id": task_id, "filename": display_name, "file_type": file_type}
 
@@ -406,15 +413,18 @@ def _process_video_url(task_id: str, url: str):
             video_title = video_info.get("title", "")
             if video_title:
                 video_stem = sanitize_stem(video_title)
-            _update(task_id, video_title=video_title, filename=video_title or url[:60])
+            _update(task_id, video_title=video_title,
+                    filename=video_title or url[:60])
 
         # 2. 提取音频
         _update(task_id, step="正在提取音频...", progress=15)
-        audio_path = asyncio.run(extract_audio_from_video(url, filename_stem=video_stem))
+        audio_path = asyncio.run(
+            extract_audio_from_video(url, filename_stem=video_stem))
 
         # 3. 预处理
         _update(task_id, step="正在预处理音频...", progress=25)
-        preprocessed = preprocess_audio(audio_path, sample_rate=settings.asr_sample_rate)
+        preprocessed = preprocess_audio(
+            audio_path, sample_rate=settings.asr_sample_rate)
         try:
             audio_path.unlink()
         except Exception:
@@ -437,7 +447,8 @@ def _process_video_url(task_id: str, url: str):
         if not transcript_text.strip():
             _update(task_id, status="failed", error="ASR 转写结果为空")
             return
-        save_asr_cache(transcript_text, video_stem)
+        asr_path = save_asr_cache(transcript_text, video_stem)
+        _update(task_id, asr_result_path=str(asr_path))
 
         # 5. LLM 分析
         _update(task_id, step="正在分析内容...", progress=65)
@@ -488,14 +499,17 @@ def _process_audio_url(task_id: str, url: str):
         if not transcript_text.strip():
             _update(task_id, status="failed", error="ASR 转写结果为空")
             return
-        save_asr_cache(transcript_text, audio_stem)
+        asr_path = save_asr_cache(transcript_text, audio_stem)
+        _update(task_id, asr_result_path=str(asr_path))
 
         _update(task_id, step="正在识别录音类型...", progress=50)
         rec_type = asyncio.run(classify_recording(transcript_text))
 
         llm_start = time.time()
-        type_labels = {"meeting": "会议录音", "interview": "面试录音", "general": "其他录音"}
-        _update(task_id, step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...", progress=60)
+        type_labels = {"meeting": "会议录音",
+                       "interview": "面试录音", "general": "其他录音"}
+        _update(
+            task_id, step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...", progress=60)
 
         llm = LLMClient()
         if rec_type == "meeting":
@@ -503,14 +517,17 @@ def _process_audio_url(task_id: str, url: str):
             data = asyncio.run(llm.chat_json(prompt))
             result = MeetingResult.model_validate(data)
             timing_info = _build_timing(asr_duration, llm_start)
-            output_text = format_markdown(result, event_time=None, timing_info=timing_info)
+            output_text = format_markdown(
+                result, event_time=None, timing_info=timing_info)
             save_summary_cache(output_text, audio_stem, rec_type="meeting")
             _save_result(task_id, audio_stem, "meeting", output_text)
         elif rec_type == "interview":
             result_raw = asyncio.run(analyze_interview(transcript_text))
             timing_info = _build_timing(asr_duration, llm_start)
-            a_md = format_interview_analysis(result_raw["a_data"], None, timing_info)
-            result_dir = RESULT_DIR / "interview" / f"{audio_stem}_{settings.asr_model}_{settings.llm_model}"
+            a_md = format_interview_analysis(
+                result_raw["a_data"], None, timing_info)
+            result_dir = RESULT_DIR / "interview" / \
+                f"{audio_stem}_{settings.asr_model}_{settings.llm_model}"
             result_dir.mkdir(parents=True, exist_ok=True)
             (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
             _update(task_id, status="completed", progress=100, step="分析完成",
@@ -566,6 +583,37 @@ async def download_result(task_id: str):
     text = Path(rp).read_text(encoding="utf-8")
     return PlainTextResponse(text, media_type="text/markdown",
                              headers={"Content-Disposition": f'attachment; filename="{Path(rp).name}"'})
+
+
+@app.get("/api/asr/{task_id}")
+async def get_asr_result(task_id: str):
+    """获取 ASR 转写结果"""
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+    task = tasks[task_id]
+    if task["status"] != "completed":
+        raise HTTPException(400, "任务尚未完成")
+    asr_path = task.get("asr_result_path")
+    if not asr_path or not Path(asr_path).exists():
+        raise HTTPException(404, "ASR 结果不存在")
+    text = Path(asr_path).read_text(encoding="utf-8")
+    return {"content": text, "filename": Path(asr_path).name}
+
+
+@app.get("/api/asr/{task_id}/download")
+async def download_asr_result(task_id: str):
+    """下载 ASR 转写结果"""
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+    task = tasks[task_id]
+    if task["status"] != "completed":
+        raise HTTPException(400, "任务尚未完成")
+    asr_path = task.get("asr_result_path")
+    if not asr_path or not Path(asr_path).exists():
+        raise HTTPException(404, "ASR 结果不存在")
+    text = Path(asr_path).read_text(encoding="utf-8")
+    return PlainTextResponse(text, media_type="text/plain",
+                             headers={"Content-Disposition": f'attachment; filename="{Path(asr_path).name}"'})
 
 
 @app.get("/api/health")
