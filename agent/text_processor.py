@@ -92,7 +92,8 @@ class TextProcessor:
             if s.begin_time - chunk_start >= window_ms and current_chunk:
                 chunks.append("\n".join(current_chunk))
                 # 保留尾部 overlap 句作为下一片段的头部重叠
-                overlap_buffer = current_chunk[-overlap_sentences:] if overlap_sentences > 0 else []
+                overlap_buffer = current_chunk[-overlap_sentences:
+                                               ] if overlap_sentences > 0 else []
                 current_chunk = []
                 chunk_start = s.begin_time
 
@@ -149,7 +150,8 @@ class TextProcessor:
             if current_len + sent_len > chunk_size and current_chunk:
                 chunks.append("\n".join(current_chunk))
                 # 保留尾部重叠句
-                overlap = current_chunk[-overlap_sentences:] if overlap_sentences > 0 else []
+                overlap = current_chunk[-overlap_sentences:
+                                        ] if overlap_sentences > 0 else []
                 current_chunk = list(overlap)
                 current_len = sum(len(s) + 1 for s in overlap)
 

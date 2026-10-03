@@ -134,8 +134,10 @@ class ASRClient:
             # DashScope 返回结构可能是 {"data": {...}} 或直接 {...}
             policy_data = raw.get("data") or raw
 
-            upload_host = policy_data.get("host", "") or policy_data.get("upload_host", "")
-            upload_dir = policy_data.get("dir", "") or policy_data.get("upload_dir", "")
+            upload_host = policy_data.get(
+                "host", "") or policy_data.get("upload_host", "")
+            upload_dir = policy_data.get(
+                "dir", "") or policy_data.get("upload_dir", "")
             policy = policy_data.get("policy", "")
             access_key_id = policy_data.get("oss_access_key_id", "")
             signature = policy_data.get("signature", "")

@@ -439,7 +439,8 @@ def video(
             console.print(f"[dim]UP主: {video_info.get('uploader', '')}[/dim]")
             duration = video_info.get("duration")
             if duration:
-                console.print(f"[dim]时长: {duration // 60}分{duration % 60}秒[/dim]")
+                console.print(
+                    f"[dim]时长: {duration // 60}分{duration % 60}秒[/dim]")
 
     # 2. 从视频提取音频
     logger.info("[2/4] 从视频提取音频...")
@@ -484,7 +485,8 @@ def video(
     data = asyncio.run(analyze_general(transcript_text))
 
     timing_info = _build_timing_info(asr_duration, llm_start, total_start)
-    output_text = format_general_result(data, event_time=None, timing_info=timing_info)
+    output_text = format_general_result(
+        data, event_time=None, timing_info=timing_info)
 
     save_summary_cache(output_text, video_stem, rec_type="video")
     console.print(
