@@ -4,6 +4,7 @@ model/
 log/
 logs/
 output/
+uploads/
 *.preprocessed.wav
 .DS_Store
 .idea
