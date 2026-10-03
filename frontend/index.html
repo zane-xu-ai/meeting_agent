@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meeting Agent · 会议助手</title>
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/marked@12/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-primary: #0b0d13;
+      --bg-secondary: #11141b;
+      --bg-card: #171b25;
+      --bg-hover: #1e2230;
+      --border: #262b3a;
+      --border-light: #333952;
+      --text-primary: #e4e6ed;
+      --text-secondary: #8b90a0;
+      --text-muted: #5c6070;
+      --accent: #6366f1;
+      --accent-hover: #818cf8;
+      --accent-glow: rgba(99, 102, 241, 0.15);
+      --success: #22c55e;
+      --success-bg: rgba(34, 197, 94, 0.1);
+      --warning: #f59e0b;
+      --warning-bg: rgba(245, 158, 11, 0.1);
+      --error: #ef4444;
+      --error-bg: rgba(239, 68, 68, 0.1);
+      --radius: 12px;
+      --radius-sm: 8px;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      min-height: 100vh;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Layout ─────────────────────────────── */
+    #app { max-width: 960px; margin: 0 auto; padding: 0 24px 80px; }
+
+    /* ── Header ─────────────────────────────── */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 28px 0 32px; border-bottom: 1px solid var(--border); margin-bottom: 40px;
+    }
+    .header-left { display: flex; align-items: center; gap: 14px; }
+    .logo {
+      width: 42px; height: 42px; border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; color: #fff; font-weight: 700;
+    }
+    .header h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.3px; }
+    .header p { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+    .health-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      display: inline-block; margin-right: 6px;
+    }
+    .health-dot.ok { background: var(--success); box-shadow: 0 0 6px var(--success); }
+    .health-dot.err { background: var(--error); }
+    .health-text { font-size: 12px; color: var(--text-muted); }
+
+    /* ── Upload Zone ────────────────────────── */
+    .upload-section { margin-bottom: 32px; }
+    .upload-zone {
+      position: relative; border: 2px dashed var(--border);
+      border-radius: var(--radius); padding: 56px 32px;
+      text-align: center; cursor: pointer;
+      transition: all 0.3s ease; background: var(--bg-secondary);
+    }
+    .upload-zone:hover, .upload-zone.drag-over {
+      border-color: var(--accent); background: var(--accent-glow);
+    }
+    .upload-zone.drag-over { transform: scale(1.01); }
+    .upload-icon {
+      width: 64px; height: 64px; margin: 0 auto 20px;
+      border-radius: 50%; background: var(--bg-card); border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.3s ease;
+    }
+    .upload-zone:hover .upload-icon,
+    .upload-zone.drag-over .upload-icon {
+      background: var(--accent-glow); border-color: var(--accent);
+    }
+    .upload-icon svg { width: 28px; height: 28px; stroke: var(--text-secondary); transition: stroke 0.3s; }
+    .upload-zone:hover .upload-icon svg,
+    .upload-zone.drag-over .upload-icon svg { stroke: var(--accent); }
+    .upload-title { font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+    .upload-hint { font-size: 14px; color: var(--text-secondary); margin-bottom: 16px; }
+    .upload-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 24px; border-radius: var(--radius-sm);
+      background: var(--accent); color: #fff; font-size: 14px; font-weight: 500;
+      border: none; cursor: pointer; transition: all 0.2s;
+    }
+    .upload-btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+    .upload-formats {
+      display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; margin-top: 20px;
+    }
+    .format-tag {
+      font-size: 11px; padding: 3px 10px; border-radius: 20px;
+      background: var(--bg-card); border: 1px solid var(--border);
+      color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px;
+    }
+
+    /* ── Processing ─────────────────────────── */
+    .processing-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 28px; margin-bottom: 24px;
+    }
+    .processing-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .processing-title { font-size: 16px; font-weight: 600; }
+    .processing-file { font-size: 13px; color: var(--text-secondary); }
+
+    .steps { display: flex; flex-direction: column; gap: 0; }
+    .step {
+      display: flex; align-items: center; gap: 14px;
+      padding: 12px 0; position: relative;
+    }
+    .step::before {
+      content: ''; position: absolute; left: 15px; top: 40px;
+      width: 2px; height: calc(100% - 16px); background: var(--border);
+    }
+    .step:last-child::before { display: none; }
+    .step.done::before, .step.active::before { background: var(--accent); opacity: 0.4; }
+    .step-dot {
+      width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg-secondary); border: 2px solid var(--border);
+      font-size: 13px; color: var(--text-muted); position: relative; z-index: 1;
+      transition: all 0.3s;
+    }
+    .step.active .step-dot {
+      border-color: var(--accent); color: var(--accent);
+      box-shadow: 0 0 12px var(--accent-glow);
+      animation: pulse 2s infinite;
+    }
+    .step.done .step-dot {
+      border-color: var(--success); background: var(--success-bg); color: var(--success);
+    }
+    .step.error .step-dot {
+      border-color: var(--error); background: var(--error-bg); color: var(--error);
+    }
+    .step-text { font-size: 14px; color: var(--text-secondary); }
+    .step.active .step-text { color: var(--text-primary); }
+    .step.done .step-text { color: var(--success); }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+      50% { box-shadow: 0 0 16px 4px var(--accent-glow); }
+    }
+
+    .progress-bar {
+      width: 100%; height: 4px; background: var(--bg-secondary);
+      border-radius: 2px; margin-top: 20px; overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+      border-radius: 2px; transition: width 0.5s ease;
+    }
+
+    /* ── Result ─────────────────────────────── */
+    .result-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+    }
+    .result-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 28px; border-bottom: 1px solid var(--border);
+    }
+    .result-title { font-size: 16px; font-weight: 600; }
+    .result-actions { display: flex; gap: 10px; }
+    .btn-sm {
+      padding: 7px 16px; border-radius: var(--radius-sm); font-size: 13px;
+      border: 1px solid var(--border); background: var(--bg-secondary);
+      color: var(--text-secondary); cursor: pointer; transition: all 0.2s;
+      display: inline-flex; align-items: center; gap: 6px;
+    }
+    .btn-sm:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-sm.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-sm.primary:hover { background: var(--accent-hover); }
+    .result-body { padding: 28px; }
+
+    /* ── Markdown Styles ────────────────────── */
+    .md-content { font-size: 14.5px; line-height: 1.75; color: var(--text-primary); }
+    .md-content h1 { font-size: 22px; font-weight: 700; margin: 0 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+    .md-content h2 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; color: var(--accent-hover); }
+    .md-content h3 { font-size: 15px; font-weight: 600; margin: 20px 0 8px; color: var(--text-primary); }
+    .md-content p { margin: 0 0 12px; }
+    .md-content ul, .md-content ol { margin: 0 0 12px; padding-left: 24px; }
+    .md-content li { margin-bottom: 4px; }
+    .md-content blockquote {
+      border-left: 3px solid var(--accent); padding: 8px 16px; margin: 0 0 16px;
+      background: var(--accent-glow); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      color: var(--text-secondary); font-size: 13px;
+    }
+    .md-content strong { color: var(--accent-hover); font-weight: 600; }
+    .md-content code { background: var(--bg-secondary); padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .md-content hr { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    .md-content table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; }
+    .md-content th, .md-content td { padding: 8px 12px; border: 1px solid var(--border); text-align: left; }
+    .md-content th { background: var(--bg-secondary); font-weight: 600; }
+
+    /* ── Error ──────────────────────────────── */
+    .error-card {
+      background: var(--error-bg); border: 1px solid rgba(239,68,68,0.3);
+      border-radius: var(--radius); padding: 20px 24px; margin-bottom: 24px;
+      display: flex; align-items: flex-start; gap: 12px;
+    }
+    .error-icon { font-size: 20px; flex-shrink: 0; margin-top: 1px; }
+    .error-msg { font-size: 14px; color: var(--error); }
+    .error-hint { font-size: 13px; color: var(--text-muted); margin-top: 6px; }
+
+    /* ── New Task ───────────────────────────── */
+    .new-task-btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 24px; border-radius: var(--radius-sm);
+      background: transparent; border: 1px solid var(--border);
+      color: var(--text-secondary); font-size: 14px; cursor: pointer;
+      transition: all 0.2s; margin-top: 24px;
+    }
+    .new-task-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ── Fade transition ────────────────────── */
+    .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+    .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+    /* ── Responsive ─────────────────────────── */
+    @media (max-width: 640px) {
+      #app { padding: 0 16px 60px; }
+      .header { padding: 20px 0 24px; }
+      .upload-zone { padding: 40px 20px; }
+      .processing-card, .result-body { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="logo">M</div>
+      <div>
+        <h1>Meeting Agent</h1>
+        <p>智能音视频分析 · 自动生成结构化总结</p>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:6px;">
+      <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
+      <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
+    </div>
+  </header>
+
+  <!-- Upload -->
+  <section v-if="phase === 'idle'" class="upload-section">
+    <div
+      class="upload-zone"
+      :class="{ 'drag-over': isDragging }"
+      @dragenter.prevent="isDragging = true"
+      @dragover.prevent="isDragging = true"
+      @dragleave.prevent="isDragging = false"
+      @drop.prevent="onDrop"
+      @click="$refs.fileInput.click()"
+    >
+      <div class="upload-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+      </div>
+      <div class="upload-title">拖拽音视频文件到此处</div>
+      <div class="upload-hint">或点击选择文件 · 支持本地文件和在线视频链接</div>
+      <button class="upload-btn" @click.stop="$refs.fileInput.click()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        选择文件
+      </button>
+      <input ref="fileInput" type="file" hidden :accept="acceptExts" @change="onFileSelect" />
+      <div class="upload-formats">
+        <span class="format-tag">mp4</span>
+        <span class="format-tag">mkv</span>
+        <span class="format-tag">avi</span>
+        <span class="format-tag">mov</span>
+        <span class="format-tag">wav</span>
+        <span class="format-tag">mp3</span>
+        <span class="format-tag">m4a</span>
+        <span class="format-tag">flac</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Processing -->
+  <transition name="fade">
+    <div v-if="phase === 'processing'" class="processing-card">
+      <div class="processing-header">
+        <div>
+          <div class="processing-title">正在分析</div>
+          <div class="processing-file">{{ task.filename }}</div>
+        </div>
+        <div v-if="task.video_title" style="font-size:13px;color:var(--text-secondary)">
+          {{ task.video_title }}
+        </div>
+      </div>
+
+      <div class="steps">
+        <div v-for="(s, i) in steps" :key="i" class="step" :class="s.state">
+          <div class="step-dot">
+            <span v-if="s.state === 'done'">&#10003;</span>
+            <span v-else-if="s.state === 'error'">&#10007;</span>
+            <span v-else>{{ i + 1 }}</span>
+          </div>
+          <div class="step-text">{{ s.label }}</div>
+        </div>
+      </div>
+
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: task.progress + '%' }"></div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- Error -->
+  <transition name="fade">
+    <div v-if="phase === 'error'" class="error-card">
+      <div class="error-icon">&#9888;</div>
+      <div>
+        <div class="error-msg">{{ task.error || '处理过程中出现错误' }}</div>
+        <div class="error-hint">请检查文件格式和 API Key 配置后重试</div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- Result -->
+  <transition name="fade">
+    <div v-if="phase === 'done'" class="result-card">
+      <div class="result-header">
+        <div class="result-title">分析结果</div>
+        <div class="result-actions">
+          <button class="btn-sm" @click="downloadResult">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            下载
+          </button>
+          <button class="btn-sm" @click="copyResult">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            {{ copied ? '已复制' : '复制' }}
+          </button>
+        </div>
+      </div>
+      <div class="result-body">
+        <div class="md-content" v-html="renderedMd"></div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- New Task -->
+  <div v-if="phase !== 'idle'" style="text-align:center;">
+    <button class="new-task-btn" @click="resetAll">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+      开始新分析
+    </button>
+  </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, computed, onMounted, onUnmounted } = Vue;
+
+createApp({
+  setup() {
+    const API = '';
+    const phase = ref('idle'); // idle | processing | done | error
+    const isDragging = ref(false);
+    const apiOk = ref(false);
+    const copied = ref(false);
+    const resultMd = ref('');
+
+    const task = reactive({
+      task_id: '', filename: '', file_type: '', progress: 0,
+      step: '', error: null, video_title: null,
+    });
+
+    const steps = reactive([
+      { label: '上传文件', state: 'done' },
+      { label: '预处理', state: 'pending' },
+      { label: '语音转写', state: 'pending' },
+      { label: '智能分析', state: 'pending' },
+      { label: '生成报告', state: 'pending' },
+    ]);
+
+    const acceptExts = [
+      '.mp4','.mkv','.avi','.mov','.webm','.flv','.wmv','.m4v',
+      '.wav','.mp3','.m4a','.flac','.ogg','.aac','.wma','.opus'
+    ].join(',');
+
+    let pollTimer = null;
+
+    const renderedMd = computed(() => {
+      if (!resultMd.value) return '';
+      return marked.parse(resultMd.value, { breaks: true });
+    });
+
+    // ── Health check ──
+    async function checkHealth() {
+      try {
+        const r = await fetch(`${API}/api/health`);
+        const d = await r.json();
+        apiOk.value = d.status === 'ok' && d.api_key_configured;
+      } catch { apiOk.value = false; }
+    }
+
+    // ── Upload ──
+    async function uploadFile(file) {
+      phase.value = 'processing';
+      resetSteps();
+      setStepState(0, 'done');
+      setStepState(1, 'active');
+
+      const form = new FormData();
+      form.append('file', file);
+      try {
+        const r = await fetch(`${API}/api/upload`, { method: 'POST', body: form });
+        if (!r.ok) {
+          const err = await r.json();
+          throw new Error(err.detail || '上传失败');
+        }
+        const d = await r.json();
+        task.task_id = d.task_id;
+        task.filename = d.filename;
+        task.file_type = d.file_type;
+        startPolling();
+      } catch (e) {
+        phase.value = 'error';
+        task.error = e.message;
+      }
+    }
+
+    function onDrop(e) {
+      isDragging.value = false;
+      const files = e.dataTransfer.files;
+      if (files.length > 0) uploadFile(files[0]);
+    }
+
+    function onFileSelect(e) {
+      const files = e.target.files;
+      if (files.length > 0) uploadFile(files[0]);
+    }
+
+    // ── Polling ──
+    function startPolling() {
+      pollTimer = setInterval(async () => {
+        try {
+          const r = await fetch(`${API}/api/status/${task.task_id}`);
+          const d = await r.json();
+          task.progress = d.progress || 0;
+          task.step = d.step || '';
+          task.video_title = d.video_title || null;
+
+          // Update step states based on progress
+          if (d.progress >= 10) setStepState(1, 'done');
+          if (d.progress >= 20) { setStepState(2, 'active'); }
+          if (d.progress >= 50) { setStepState(2, 'done'); setStepState(3, 'active'); }
+          if (d.progress >= 65) { setStepState(3, 'done'); setStepState(4, 'active'); }
+
+          if (d.status === 'completed') {
+            setStepState(4, 'done');
+            clearInterval(pollTimer);
+            await fetchResult();
+          } else if (d.status === 'failed') {
+            phase.value = 'error';
+            task.error = d.error;
+            setStepState(getActiveStep(), 'error');
+            clearInterval(pollTimer);
+          }
+        } catch { /* retry next tick */ }
+      }, 2000);
+    }
+
+    function getActiveStep() {
+      for (let i = steps.length - 1; i >= 0; i--) {
+        if (steps[i].state === 'active') return i;
+      }
+      return 1;
+    }
+
+    async function fetchResult() {
+      try {
+        const r = await fetch(`${API}/api/result/${task.task_id}`);
+        const d = await r.json();
+        resultMd.value = d.content || '';
+        phase.value = 'done';
+      } catch (e) {
+        phase.value = 'error';
+        task.error = '获取结果失败: ' + e.message;
+      }
+    }
+
+    // ── Steps helper ──
+    function resetSteps() {
+      steps.forEach((s, i) => { s.state = i === 0 ? 'done' : 'pending'; });
+    }
+    function setStepState(idx, state) {
+      if (idx >= 0 && idx < steps.length) steps[idx].state = state;
+    }
+
+    // ── Actions ──
+    async function downloadResult() {
+      window.open(`${API}/api/result/${task.task_id}/download`);
+    }
+
+    async function copyResult() {
+      try {
+        await navigator.clipboard.writeText(resultMd.value);
+        copied.value = true;
+        setTimeout(() => copied.value = false, 2000);
+      } catch { /* fallback */ }
+    }
+
+    function resetAll() {
+      clearInterval(pollTimer);
+      phase.value = 'idle';
+      isDragging.value = false;
+      copied.value = false;
+      resultMd.value = '';
+      Object.assign(task, { task_id:'', filename:'', file_type:'', progress:0, step:'', error:null, video_title:null });
+      resetSteps();
+    }
+
+    // ── Lifecycle ──
+    onMounted(() => { checkHealth(); });
+    onUnmounted(() => { clearInterval(pollTimer); });
+
+    return {
+      phase, isDragging, apiOk, copied, task, steps, acceptExts,
+      renderedMd, resultMd,
+      onDrop, onFileSelect, downloadResult, copyResult, resetAll,
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
