@@ -1,8 +1,10 @@
 """会议助手 - 结果缓存管理
 
 缓存目录结构:
-    output/asr/{audio_stem}_{asr_model}.txt         -- ASR 转写结果 (文本格式)
-    output/summary/{audio_stem}_{asr_model}_{llm_model}.md  -- LLM 总结结果
+    output/asr/{audio_stem}_{asr_model}.txt                         -- ASR 转写结果
+    output/summary/{audio_stem}_{asr_model}_{llm_model}.md          -- 会议/通用 总结
+    output/summary/{audio_stem}_{asr_model}_{llm_model}/question.md -- 面试问题列表
+    output/summary/{audio_stem}_{asr_model}_{llm_model}/analyze.md  -- 面试逐题分析
 """
 
 from __future__ import annotations
@@ -61,14 +63,14 @@ def save_asr_cache(
     return cache_path
 
 
-# ---------- Summary 缓存 ----------
+# ---------- Summary 缓存 (会议/通用: 单文件) ----------
 
 def _summary_cache_path(
     audio_stem: str,
     asr_model: str | None = None,
     llm_model: str | None = None,
 ) -> Path:
-    """Summary 缓存文件路径"""
+    """Summary 缓存文件路径 (会议/通用类型)"""
     am = asr_model or settings.asr_model
     lm = llm_model or settings.llm_model
     return settings.output_dir / "summary" / f"{audio_stem}_{am}_{lm}.md"
@@ -80,7 +82,7 @@ def load_summary_cache(
     llm_model: str | None = None,
 ) -> str | None:
     """
-    尝试加载 Summary 缓存。命中返回 Markdown 文本，未命中返回 None。
+    尝试加载 Summary 缓存 (会议/通用)。命中返回 Markdown 文本，未命中返回 None。
     """
     cache_path = _summary_cache_path(audio_stem, asr_model, llm_model)
     if cache_path.exists():
@@ -95,9 +97,65 @@ def save_summary_cache(
     asr_model: str | None = None,
     llm_model: str | None = None,
 ) -> Path:
-    """保存 Summary 结果到缓存"""
+    """保存 Summary 结果到缓存 (会议/通用类型)"""
     cache_path = _summary_cache_path(audio_stem, asr_model, llm_model)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(markdown_text, encoding="utf-8")
     logger.info(f"[缓存保存] Summary 结果: {cache_path}")
     return cache_path
+
+
+# ---------- Summary 缓存 (面试: 目录结构) ----------
+
+def _interview_cache_dir(
+    audio_stem: str,
+    asr_model: str | None = None,
+    llm_model: str | None = None,
+) -> Path:
+    """面试录音缓存目录路径"""
+    am = asr_model or settings.asr_model
+    lm = llm_model or settings.llm_model
+    return settings.output_dir / "summary" / f"{audio_stem}_{am}_{lm}"
+
+
+def load_interview_cache(
+    audio_stem: str,
+    asr_model: str | None = None,
+    llm_model: str | None = None,
+) -> dict[str, str] | None:
+    """
+    尝试加载面试录音缓存。
+
+    命中返回 {"question": "...", "analyze": "..."}，未命中返回 None。
+    """
+    cache_dir = _interview_cache_dir(audio_stem, asr_model, llm_model)
+    q_path = cache_dir / "question.md"
+    a_path = cache_dir / "analyze.md"
+
+    if q_path.exists() and a_path.exists():
+        logger.info(f"[缓存命中] 面试分析结果: {cache_dir.name}/")
+        return {
+            "question": q_path.read_text(encoding="utf-8"),
+            "analyze": a_path.read_text(encoding="utf-8"),
+        }
+    return None
+
+
+def save_interview_cache(
+    question_md: str,
+    analyze_md: str,
+    audio_stem: str,
+    asr_model: str | None = None,
+    llm_model: str | None = None,
+) -> Path:
+    """保存面试录音分析结果到缓存目录"""
+    cache_dir = _interview_cache_dir(audio_stem, asr_model, llm_model)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    q_path = cache_dir / "question.md"
+    a_path = cache_dir / "analyze.md"
+    q_path.write_text(question_md, encoding="utf-8")
+    a_path.write_text(analyze_md, encoding="utf-8")
+
+    logger.info(f"[缓存保存] 面试分析结果: {cache_dir}/")
+    return cache_dir

@@ -11,6 +11,11 @@ from loguru import logger
 from agent.asr_client import ASRClient
 from agent.llm_client import LLMClient
 from agent.prompts import (
+    GENERAL_ANALYSIS_PROMPT,
+    GENERAL_MERGE_PROMPT,
+    GENERAL_SEGMENT_PROMPT,
+    INTERVIEW_ANALYSIS_PROMPT,
+    INTERVIEW_QUESTIONS_PROMPT,
     MEETING_ANALYSIS_PROMPT,
     MERGE_SUMMARIES_PROMPT,
     SEGMENT_SUMMARY_PROMPT,
@@ -140,6 +145,239 @@ class MeetingPipeline:
         data = await self.llm.chat_json(merge_prompt)
         return MeetingResult.model_validate(data)
 
+
+# ---------- 面试录音分析 ----------
+
+async def analyze_interview(transcript_text: str) -> dict[str, str]:
+    """
+    面试录音分析: 生成 question.md 和 analyze.md。
+
+    Returns:
+        {"question": "...", "analyze": "..."} 两份 Markdown 文本
+    """
+    llm = LLMClient()
+
+    # 1. 提取问题
+    logger.info("面试分析 [1/2]: 提取面试官问题...")
+    q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=transcript_text)
+    q_data = await llm.chat_json(q_prompt)
+    question_md = format_interview_questions(q_data)
+
+    # 2. 逐题分析评分 (输出较长，需要更大的 max_tokens)
+    logger.info("面试分析 [2/2]: 逐题分析评分...")
+    a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=transcript_text)
+    a_data = await llm.chat_json(a_prompt, max_tokens=16384)
+    analyze_md = format_interview_analysis(a_data)
+
+    return {"question": question_md, "analyze": analyze_md}
+
+
+def format_interview_questions(data: dict) -> str:
+    """将面试问题 JSON 格式化为 Markdown"""
+    lines = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append(f"# 面试问题列表 - {now}")
+    lines.append("")
+
+    questions = data.get("questions", [])
+    if not questions:
+        lines.append("未识别到面试官提问。")
+        return "\n".join(lines)
+
+    lines.append(f"共提取 **{len(questions)}** 个问题：")
+    lines.append("")
+
+    for q in questions:
+        qid = q.get("id", "?")
+        question = q.get("question", "")
+        context = q.get("context", "")
+        time_range = q.get("time_range", "")
+        tag = f" `{context}`" if context else ""
+        time_tag = f" ({time_range})" if time_range else ""
+        lines.append(f"### Q{qid}. {question}{tag}{time_tag}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_interview_analysis(data: dict) -> str:
+    """将面试分析 JSON 格式化为 Markdown"""
+    lines = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append(f"# 面试分析报告 - {now}")
+    lines.append("")
+
+    # 总结放在最上面
+    overall_summary = data.get("overall_summary", "")
+    overall_score = data.get("overall_score", 0)
+    lines.append("## 面试总结")
+    lines.append("")
+    lines.append(f"**最终评分: {overall_score}/100**")
+    lines.append("")
+    lines.append(overall_summary)
+    lines.append("")
+
+    # 逐题分析
+    analyses = data.get("question_analyses", [])
+    if not analyses:
+        return "\n".join(lines)
+
+    lines.append("---")
+    lines.append("")
+    lines.append("## 逐题分析")
+    lines.append("")
+
+    for a in analyses:
+        qid = a.get("id", "?")
+        question = a.get("question", "")
+        score = a.get("score", 0)
+        candidate_answer = a.get("candidate_answer", "")
+        recommended = a.get("recommended_answer", "")
+        improvement = a.get("improvement", {})
+
+        lines.append(f"### Q{qid}. {question}")
+        lines.append("")
+        lines.append(f"**得分: {score}/100**")
+        lines.append("")
+
+        lines.append("#### 面试者回答")
+        lines.append(candidate_answer)
+        lines.append("")
+
+        lines.append("#### 推荐答案")
+        lines.append(recommended)
+        lines.append("")
+
+        lines.append("#### 改进建议")
+        if improvement:
+            for dim in ["accuracy", "completeness", "expression", "suggestions"]:
+                label_map = {
+                    "accuracy": "准确性",
+                    "completeness": "全面性",
+                    "expression": "表达",
+                    "suggestions": "改进建议",
+                }
+                val = improvement.get(dim, "")
+                if val:
+                    lines.append(f"- **{label_map[dim]}**: {val}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------- 通用录音分析 ----------
+
+async def analyze_general(transcript_text: str) -> str:
+    """
+    通用录音分析: 摘要、章节、关键词等。
+
+    Returns:
+        Markdown 格式的总结文本
+    """
+    llm = LLMClient()
+    estimated_tokens = len(transcript_text) // 2
+
+    if estimated_tokens <= settings.max_tokens_per_chunk:
+        logger.info(f"通用分析: 文本较短 (~{estimated_tokens} tokens)，整体分析")
+        prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
+        data = await llm.chat_json(prompt)
+        return format_general_result(data)
+    else:
+        logger.info(f"通用分析: 文本较长 (~{estimated_tokens} tokens)，分段分析")
+        return await _segmented_general(transcript_text, llm)
+
+
+async def _segmented_general(transcript_text: str, llm: LLMClient) -> str:
+    """通用录音的分段分析"""
+    from agent.text_processor import TextProcessor
+
+    processor = TextProcessor()
+    # 简单按字符数切片(每 ~3000 字一段)
+    chunk_size = 3000
+    chunks = [transcript_text[i:i + chunk_size]
+              for i in range(0, len(transcript_text), chunk_size)]
+
+    if len(chunks) <= 1:
+        prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
+        data = await llm.chat_json(prompt)
+        return format_general_result(data)
+
+    segment_results = []
+    for i, chunk in enumerate(chunks):
+        logger.info(f"通用分析: 第 {i + 1}/{len(chunks)} 段...")
+        prompt = GENERAL_SEGMENT_PROMPT.format(transcript=chunk)
+        try:
+            data = await llm.chat_json(prompt)
+            segment_results.append(json.dumps(data, ensure_ascii=False))
+        except Exception as e:
+            logger.warning(f"第 {i + 1} 段分析失败: {e}")
+            continue
+
+    if not segment_results:
+        raise ValueError("所有分段分析均失败")
+
+    combined = "\n\n---\n\n".join(
+        f"### 片段 {i + 1}\n{s}" for i, s in enumerate(segment_results)
+    )
+    merge_prompt = GENERAL_MERGE_PROMPT.format(summaries=combined)
+    data = await llm.chat_json(merge_prompt)
+    return format_general_result(data)
+
+
+def format_general_result(data: dict) -> str:
+    """将通用分析 JSON 格式化为 Markdown"""
+    lines = []
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines.append(f"# 内容分析总结 - {now}")
+    lines.append("")
+
+    # 摘要
+    summary = data.get("summary", "")
+    if summary:
+        lines.append("## 全文摘要")
+        lines.append(summary)
+        lines.append("")
+
+    # 说话人
+    speakers = data.get("speakers", [])
+    if speakers:
+        lines.append("## 说话人")
+        lines.append("、".join(speakers))
+        lines.append("")
+
+    # 章节速览
+    topics = data.get("topics", [])
+    if topics:
+        lines.append("## 章节速览")
+        for i, topic in enumerate(topics, 1):
+            time_range = ""
+            st = topic.get("start_time", "")
+            et = topic.get("end_time", "")
+            if st or et:
+                time_range = f" ({st or '?'} - {et or '?'})"
+            lines.append(f"### {i}. {topic.get('title', '')}{time_range}")
+            lines.append(topic.get("summary", ""))
+            lines.append("")
+
+    # 亮点
+    highlights = data.get("highlights", [])
+    if highlights:
+        lines.append("## 关键信息")
+        for h in highlights:
+            lines.append(f"- {h}")
+        lines.append("")
+
+    # 关键词
+    keywords = data.get("keywords", [])
+    if keywords:
+        lines.append("## 关键词")
+        lines.append("、".join(keywords))
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------- 格式化函数 (保留会议) ----------
 
 def format_markdown(result: MeetingResult, title: str = "会议纪要") -> str:
     """将 MeetingResult 格式化为 Markdown 输出"""
