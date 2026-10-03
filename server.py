@@ -54,6 +54,10 @@ class UploadResponse(BaseModel):
     file_type: str
 
 
+class UrlRequest(BaseModel):
+    url: str
+
+
 # ── Task Store ───────────────────────────────────────────────
 
 tasks: dict[str, dict] = {}
@@ -283,6 +287,14 @@ VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov",
 AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".wma", ".opus"}
 ALLOWED_EXTS = VIDEO_EXTS | AUDIO_EXTS
 
+# 已知视频平台域名
+VIDEO_DOMAINS = {
+    "youtube.com", "youtu.be", "www.youtube.com", "m.youtube.com",
+    "bilibili.com", "www.bilibili.com", "b23.tv", "bili2233.cn",
+    "v.qq.com", "youku.com", "iqiyi.com", "tudou.com",
+    "vimeo.com", "dailymotion.com", "twitter.com", "x.com",
+}
+
 
 # ── API Endpoints ────────────────────────────────────────────
 
@@ -322,6 +334,199 @@ async def upload_file(file: UploadFile = File(...)):
         task_id, file_path), daemon=True).start()
 
     return UploadResponse(task_id=task_id, filename=file.filename or "", file_type=file_type)
+
+
+@app.post("/api/submit-url")
+async def submit_url(req: UrlRequest):
+    """提交音视频链接进行分析"""
+    url = req.url.strip()
+    if not url:
+        raise HTTPException(400, "请输入有效的音视频链接")
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "链接需以 http:// 或 https:// 开头")
+
+    # 判断是视频还是音频链接
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    domain = parsed.netloc.lower().replace("www.", "")
+    is_video = any(vd in domain for vd in {
+        "youtube.com", "youtu.be", "bilibili.com", "b23.tv",
+        "v.qq.com", "youku.com", "iqiyi.com", "vimeo.com",
+    })
+    # 也检查扩展名
+    if not is_video:
+        ext = Path(parsed.path).suffix.lower()
+        is_video = ext in VIDEO_EXTS
+
+    file_type = "video" if is_video else "audio"
+    task_id = _new_task_id()
+    display_name = url[:80] + ("..." if len(url) > 80 else "")
+
+    with tasks_lock:
+        tasks[task_id] = {
+            "task_id": task_id,
+            "status": "pending",
+            "progress": 0,
+            "step": "任务已创建",
+            "error": None,
+            "result_path": None,
+            "filename": display_name,
+            "file_type": file_type,
+            "video_title": None,
+        }
+
+    if is_video:
+        threading.Thread(target=_process_video_url, args=(task_id, url), daemon=True).start()
+    else:
+        threading.Thread(target=_process_audio_url, args=(task_id, url), daemon=True).start()
+
+    return {"task_id": task_id, "filename": display_name, "file_type": file_type}
+
+
+# ── URL Processing (background threads) ─────────────────────
+
+
+def _process_video_url(task_id: str, url: str):
+    """后台线程: 处理视频 URL"""
+    try:
+        from agent.cache import get_audio_stem, sanitize_stem, save_asr_cache, save_summary_cache, load_summary_cache
+        from agent.video_client import get_video_info, extract_audio_from_video
+        from agent.asr_client import ASRClient
+        from agent.text_processor import TextProcessor
+        from agent.pipeline import analyze_general, format_general_result
+        from utils.audio import preprocess_audio
+
+        video_stem = get_audio_stem(url)
+        video_title = None
+
+        # 1. 视频信息
+        _update(task_id, step="正在获取视频信息...", progress=5)
+        video_info = asyncio.run(get_video_info(url))
+        if video_info:
+            video_title = video_info.get("title", "")
+            if video_title:
+                video_stem = sanitize_stem(video_title)
+            _update(task_id, video_title=video_title, filename=video_title or url[:60])
+
+        # 2. 提取音频
+        _update(task_id, step="正在提取音频...", progress=15)
+        audio_path = asyncio.run(extract_audio_from_video(url, filename_stem=video_stem))
+
+        # 3. 预处理
+        _update(task_id, step="正在预处理音频...", progress=25)
+        preprocessed = preprocess_audio(audio_path, sample_rate=settings.asr_sample_rate)
+        try:
+            audio_path.unlink()
+        except Exception:
+            pass
+
+        # 4. ASR
+        _update(task_id, step="正在语音转写...", progress=35)
+        asr = ASRClient()
+        t0 = time.time()
+        transcript = asyncio.run(asr.transcribe(str(preprocessed)))
+        asr_duration = time.time() - t0
+        try:
+            preprocessed.unlink()
+        except Exception:
+            pass
+
+        processor = TextProcessor()
+        cleaned = processor.clean(transcript)
+        transcript_text = cleaned.formatted_text
+        if not transcript_text.strip():
+            _update(task_id, status="failed", error="ASR 转写结果为空")
+            return
+        save_asr_cache(transcript_text, video_stem)
+
+        # 5. LLM 分析
+        _update(task_id, step="正在分析内容...", progress=65)
+        llm_start = time.time()
+        cached = load_summary_cache(video_stem, rec_type="video")
+        if cached is not None:
+            output_text = cached
+        else:
+            data = asyncio.run(analyze_general(transcript_text))
+            timing_info = _build_timing(asr_duration, llm_start)
+            output_text = format_general_result(data, None, timing_info)
+            save_summary_cache(output_text, video_stem, rec_type="video")
+
+        _save_result(task_id, video_stem, "video", output_text)
+        _update(task_id, status="completed", progress=100, step="分析完成")
+
+    except Exception as e:
+        _update(task_id, status="failed", error=str(e), step="处理失败")
+
+
+def _process_audio_url(task_id: str, url: str):
+    """后台线程: 处理音频 URL"""
+    try:
+        from agent.cache import get_audio_stem, save_asr_cache, save_summary_cache, load_asr_cache
+        from agent.asr_client import ASRClient
+        from agent.text_processor import TextProcessor
+        from agent.classifier import classify_recording
+        from agent.llm_client import LLMClient
+        from agent.prompts import MEETING_ANALYSIS_PROMPT
+        from agent.pipeline import (
+            analyze_interview, analyze_general,
+            format_interview_questions, format_interview_analysis,
+            format_general_result, format_markdown,
+        )
+        from models.schemas import MeetingResult
+
+        audio_stem = get_audio_stem(url)
+        _update(task_id, step="正在语音转写...", progress=20)
+
+        asr = ASRClient()
+        t0 = time.time()
+        transcript = asyncio.run(asr.transcribe(url))
+        asr_duration = time.time() - t0
+
+        processor = TextProcessor()
+        cleaned = processor.clean(transcript)
+        transcript_text = cleaned.formatted_text
+        if not transcript_text.strip():
+            _update(task_id, status="failed", error="ASR 转写结果为空")
+            return
+        save_asr_cache(transcript_text, audio_stem)
+
+        _update(task_id, step="正在识别录音类型...", progress=50)
+        rec_type = asyncio.run(classify_recording(transcript_text))
+
+        llm_start = time.time()
+        type_labels = {"meeting": "会议录音", "interview": "面试录音", "general": "其他录音"}
+        _update(task_id, step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...", progress=60)
+
+        llm = LLMClient()
+        if rec_type == "meeting":
+            prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
+            data = asyncio.run(llm.chat_json(prompt))
+            result = MeetingResult.model_validate(data)
+            timing_info = _build_timing(asr_duration, llm_start)
+            output_text = format_markdown(result, event_time=None, timing_info=timing_info)
+            save_summary_cache(output_text, audio_stem, rec_type="meeting")
+            _save_result(task_id, audio_stem, "meeting", output_text)
+        elif rec_type == "interview":
+            result_raw = asyncio.run(analyze_interview(transcript_text))
+            timing_info = _build_timing(asr_duration, llm_start)
+            a_md = format_interview_analysis(result_raw["a_data"], None, timing_info)
+            result_dir = RESULT_DIR / "interview" / f"{audio_stem}_{settings.asr_model}_{settings.llm_model}"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
+            _update(task_id, status="completed", progress=100, step="分析完成",
+                    result_path=str(result_dir / "analyze.md"))
+            return
+        else:
+            data = asyncio.run(analyze_general(transcript_text))
+            timing_info = _build_timing(asr_duration, llm_start)
+            output_text = format_general_result(data, None, timing_info)
+            save_summary_cache(output_text, audio_stem, rec_type="general")
+            _save_result(task_id, audio_stem, "other", output_text)
+
+        _update(task_id, status="completed", progress=100, step="分析完成")
+
+    except Exception as e:
+        _update(task_id, status="failed", error=str(e), step="处理失败")
 
 
 @app.get("/api/status/{task_id}")
