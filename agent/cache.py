@@ -1,10 +1,12 @@
 """会议助手 - 结果缓存管理
 
 缓存目录结构:
-    output/asr/{audio_stem}_{asr_model}.txt                         -- ASR 转写结果
-    output/summary/{audio_stem}_{asr_model}_{llm_model}.md          -- 会议/通用 总结
-    output/summary/{audio_stem}_{asr_model}_{llm_model}/question.md -- 面试问题列表
-    output/summary/{audio_stem}_{asr_model}_{llm_model}/analyze.md  -- 面试逐题分析
+    output/asr/{audio_stem}_{asr_model}.txt                                  -- ASR 转写结果
+    output/summary/meeting/{audio_stem}_{asr_model}_{llm_model}.md           -- 会议总结
+    output/summary/interview/{audio_stem}_{asr_model}_{llm_model}/question.md -- 面试问题列表
+    output/summary/interview/{audio_stem}_{asr_model}_{llm_model}/analyze.md  -- 面试逐题分析
+    output/summary/other/{audio_stem}_{asr_model}_{llm_model}.md             -- 其他录音总结
+    output/summary/video/                                                     -- 视频总结(预留)
 """
 
 from __future__ import annotations
@@ -15,6 +17,14 @@ from urllib.parse import unquote, urlparse
 from loguru import logger
 
 from config import settings
+
+# 录音类型 -> summary 子目录名
+_TYPE_TO_SUBDIR = {
+    "meeting": "meeting",
+    "interview": "interview",
+    "general": "other",
+    "video": "video",
+}
 
 
 def get_audio_stem(audio_source: str) -> str:
@@ -31,6 +41,11 @@ def get_audio_stem(audio_source: str) -> str:
         return path_stem
     else:
         return Path(audio_source).stem
+
+
+def _rec_type_to_subdir(rec_type: str) -> str:
+    """将录音类型映射为 summary 子目录名"""
+    return _TYPE_TO_SUBDIR.get(rec_type, "other")
 
 
 # ---------- ASR 缓存 ----------
@@ -67,26 +82,29 @@ def save_asr_cache(
 
 def _summary_cache_path(
     audio_stem: str,
+    rec_type: str = "meeting",
     asr_model: str | None = None,
     llm_model: str | None = None,
 ) -> Path:
     """Summary 缓存文件路径 (会议/通用类型)"""
     am = asr_model or settings.asr_model
     lm = llm_model or settings.llm_model
-    return settings.output_dir / "summary" / f"{audio_stem}_{am}_{lm}.md"
+    subdir = _rec_type_to_subdir(rec_type)
+    return settings.output_dir / "summary" / subdir / f"{audio_stem}_{am}_{lm}.md"
 
 
 def load_summary_cache(
     audio_stem: str,
+    rec_type: str = "meeting",
     asr_model: str | None = None,
     llm_model: str | None = None,
 ) -> str | None:
     """
     尝试加载 Summary 缓存 (会议/通用)。命中返回 Markdown 文本，未命中返回 None。
     """
-    cache_path = _summary_cache_path(audio_stem, asr_model, llm_model)
+    cache_path = _summary_cache_path(audio_stem, rec_type, asr_model, llm_model)
     if cache_path.exists():
-        logger.info(f"[缓存命中] Summary 结果: {cache_path.name}")
+        logger.info(f"[缓存命中] Summary 结果: {cache_path}")
         return cache_path.read_text(encoding="utf-8")
     return None
 
@@ -94,11 +112,12 @@ def load_summary_cache(
 def save_summary_cache(
     markdown_text: str,
     audio_stem: str,
+    rec_type: str = "meeting",
     asr_model: str | None = None,
     llm_model: str | None = None,
 ) -> Path:
     """保存 Summary 结果到缓存 (会议/通用类型)"""
-    cache_path = _summary_cache_path(audio_stem, asr_model, llm_model)
+    cache_path = _summary_cache_path(audio_stem, rec_type, asr_model, llm_model)
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     cache_path.write_text(markdown_text, encoding="utf-8")
     logger.info(f"[缓存保存] Summary 结果: {cache_path}")
@@ -115,7 +134,7 @@ def _interview_cache_dir(
     """面试录音缓存目录路径"""
     am = asr_model or settings.asr_model
     lm = llm_model or settings.llm_model
-    return settings.output_dir / "summary" / f"{audio_stem}_{am}_{lm}"
+    return settings.output_dir / "summary" / "interview" / f"{audio_stem}_{am}_{lm}"
 
 
 def load_interview_cache(
@@ -133,7 +152,7 @@ def load_interview_cache(
     a_path = cache_dir / "analyze.md"
 
     if q_path.exists() and a_path.exists():
-        logger.info(f"[缓存命中] 面试分析结果: {cache_dir.name}/")
+        logger.info(f"[缓存命中] 面试分析结果: {cache_dir}/")
         return {
             "question": q_path.read_text(encoding="utf-8"),
             "analyze": a_path.read_text(encoding="utf-8"),

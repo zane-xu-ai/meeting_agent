@@ -188,7 +188,8 @@ def analyze(
     from agent.classifier import classify_recording
     rec_type = asyncio.run(classify_recording(transcript_text))
     type_labels = {"meeting": "会议录音", "interview": "面试录音", "general": "其他录音"}
-    console.print(f"[bold cyan]录音类型:[/bold cyan] {type_labels.get(rec_type, rec_type)}")
+    console.print(
+        f"[bold cyan]录音类型:[/bold cyan] {type_labels.get(rec_type, rec_type)}")
 
     # 3. 根据类型路由到不同分析策略
     logger.info(f"[3/3] 开始分析 ({type_labels.get(rec_type, rec_type)})...")
@@ -202,17 +203,17 @@ def analyze(
 
 
 def _handle_meeting(audio_stem: str, transcript_text: str, output_format: str):
-    """处理会议录音"""
+    """处理会议录音 -> output/summary/meeting/"""
     from agent.llm_client import LLMClient
     from agent.prompts import MEETING_ANALYSIS_PROMPT
     from models.schemas import MeetingResult
 
     # 检查 Summary 缓存
-    cached = load_summary_cache(audio_stem)
+    cached = load_summary_cache(audio_stem, rec_type="meeting")
     if cached is not None:
         console.print(
             f"[green]使用 Summary 缓存: "
-            f"{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+            f"meeting/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
         )
         console.print(Markdown(cached))
         return
@@ -223,10 +224,10 @@ def _handle_meeting(audio_stem: str, transcript_text: str, output_format: str):
     result = MeetingResult.model_validate(data)
 
     output_text = format_markdown(result)
-    save_summary_cache(output_text, audio_stem)
+    save_summary_cache(output_text, audio_stem, rec_type="meeting")
     console.print(
         f"[green]Summary 已保存: "
-        f"{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+        f"meeting/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
     )
 
     if output_format == "json":
@@ -236,13 +237,13 @@ def _handle_meeting(audio_stem: str, transcript_text: str, output_format: str):
 
 
 def _handle_interview(audio_stem: str, transcript_text: str):
-    """处理面试录音"""
+    """处理面试录音 -> output/summary/interview/{name}_{asr}_{llm}/"""
     # 检查面试缓存
     cached = load_interview_cache(audio_stem)
     if cached is not None:
         console.print(
             f"[green]使用面试分析缓存: "
-            f"{audio_stem}_{settings.asr_model}_{settings.llm_model}/[/green]"
+            f"interview/{audio_stem}_{settings.asr_model}_{settings.llm_model}/[/green]"
         )
         console.print(Markdown(cached["analyze"]))
         return
@@ -250,14 +251,9 @@ def _handle_interview(audio_stem: str, transcript_text: str):
     result = asyncio.run(analyze_interview(transcript_text))
 
     save_interview_cache(result["question"], result["analyze"], audio_stem)
-    console.print(
-        f"[green]面试分析已保存: "
-        f"{audio_stem}_{settings.asr_model}_{settings.llm_model}/question.md[/green]"
-    )
-    console.print(
-        f"[green]面试分析已保存: "
-        f"{audio_stem}_{settings.asr_model}_{settings.llm_model}/analyze.md[/green]"
-    )
+    subdir = f"interview/{audio_stem}_{settings.asr_model}_{settings.llm_model}"
+    console.print(f"[green]面试分析已保存: {subdir}/question.md[/green]")
+    console.print(f"[green]面试分析已保存: {subdir}/analyze.md[/green]")
 
     console.print("\n[bold]--- 面试问题列表 ---[/bold]")
     console.print(Markdown(result["question"]))
@@ -266,22 +262,22 @@ def _handle_interview(audio_stem: str, transcript_text: str):
 
 
 def _handle_general(audio_stem: str, transcript_text: str):
-    """处理通用录音"""
+    """处理通用录音 -> output/summary/other/"""
     # 检查 Summary 缓存
-    cached = load_summary_cache(audio_stem)
+    cached = load_summary_cache(audio_stem, rec_type="general")
     if cached is not None:
         console.print(
             f"[green]使用 Summary 缓存: "
-            f"{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+            f"other/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
         )
         console.print(Markdown(cached))
         return
 
     output_text = asyncio.run(analyze_general(transcript_text))
-    save_summary_cache(output_text, audio_stem)
+    save_summary_cache(output_text, audio_stem, rec_type="general")
     console.print(
         f"[green]Summary 已保存: "
-        f"{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+        f"other/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
     )
 
     console.print(Markdown(output_text))
