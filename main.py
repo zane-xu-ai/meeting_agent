@@ -91,7 +91,7 @@ async def _get_transcript_text(
     cached = load_asr_cache(audio_stem)
     if cached is not None:
         console.print(
-            f"[green]使用 ASR 缓存: {audio_stem}_{settings.asr_model}.txt[/green]")
+            f"[green]使用 ASR 缓存: {audio_stem}_{settings.asr_models[0]}.txt[/green]")
         return cached, True, 0.0
 
     # 2. 缓存未命中，执行 ASR 转写
@@ -121,7 +121,7 @@ async def _get_transcript_text(
     # 4. 保存 ASR 缓存
     save_asr_cache(transcript_text, audio_stem)
     console.print(
-        f"[green]ASR 结果已保存: {audio_stem}_{settings.asr_model}.txt[/green]")
+        f"[green]ASR 结果已保存: {audio_stem}_{settings.asr_models[0]}.txt[/green]")
 
     return transcript_text, False, asr_duration
 
@@ -196,8 +196,8 @@ def analyze(
     console.print(
         Panel(
             f"[bold]音频:[/bold] {display_name}\n"
-            f"[bold]ASR 模型:[/bold] {settings.asr_model}\n"
-            f"[bold]LLM 模型:[/bold] {settings.llm_model}",
+            f"[bold]ASR 模型:[/bold] {settings.asr_models[0]}\n"
+            f"[bold]LLM 模型:[/bold] {settings.llm_models[0]}",
             title="会议助手智能体",
             border_style="blue",
         )
@@ -272,7 +272,7 @@ def _handle_meeting(
     if cached is not None:
         console.print(
             f"[green]使用 Summary 缓存: "
-            f"meeting/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+            f"meeting/{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md[/green]"
         )
         console.print(Markdown(cached))
         return
@@ -288,7 +288,7 @@ def _handle_meeting(
     save_summary_cache(output_text, audio_stem, rec_type="meeting")
     console.print(
         f"[green]Summary 已保存: "
-        f"meeting/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+        f"meeting/{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md[/green]"
     )
 
     if output_format == "json":
@@ -313,7 +313,7 @@ def _handle_interview(
     if cached is not None:
         console.print(
             f"[green]使用面试分析缓存: "
-            f"interview/{audio_stem}_{settings.asr_model}_{settings.llm_model}/[/green]"
+            f"interview/{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}/[/green]"
         )
         console.print(Markdown(cached["analyze"]))
         return
@@ -329,7 +329,7 @@ def _handle_interview(
         result_raw["a_data"], event_time, timing_info)
 
     save_interview_cache(question_md, analyze_md, audio_stem)
-    subdir = f"interview/{audio_stem}_{settings.asr_model}_{settings.llm_model}"
+    subdir = f"interview/{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
     console.print(f"[green]面试分析已保存: {subdir}/question.md[/green]")
     console.print(f"[green]面试分析已保存: {subdir}/analyze.md[/green]")
 
@@ -355,7 +355,7 @@ def _handle_general(
     if cached is not None:
         console.print(
             f"[green]使用 Summary 缓存: "
-            f"other/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+            f"other/{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md[/green]"
         )
         console.print(Markdown(cached))
         return
@@ -370,7 +370,7 @@ def _handle_general(
     save_summary_cache(output_text, audio_stem, rec_type="general")
     console.print(
         f"[green]Summary 已保存: "
-        f"other/{audio_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+        f"other/{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md[/green]"
     )
 
     console.print(Markdown(output_text))
@@ -415,8 +415,8 @@ def video(
     console.print(
         Panel(
             f"[bold]视频:[/bold] {display_name}\n"
-            f"[bold]ASR 模型:[/bold] {settings.asr_model}\n"
-            f"[bold]LLM 模型:[/bold] {settings.llm_model}",
+            f"[bold]ASR 模型:[/bold] {settings.asr_models[0]}\n"
+            f"[bold]LLM 模型:[/bold] {settings.llm_models[0]}",
             title="视频总结",
             border_style="blue",
         )
@@ -476,7 +476,7 @@ def video(
     if cached is not None:
         console.print(
             f"[green]使用 Summary 缓存: "
-            f"video/{video_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+            f"video/{video_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md[/green]"
         )
         console.print(Markdown(cached))
         return
@@ -491,7 +491,7 @@ def video(
     save_summary_cache(output_text, video_stem, rec_type="video")
     console.print(
         f"[green]Summary 已保存: "
-        f"video/{video_stem}_{settings.asr_model}_{settings.llm_model}.md[/green]"
+        f"video/{video_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md[/green]"
     )
 
     console.print(Markdown(output_text))

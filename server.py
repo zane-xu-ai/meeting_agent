@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
 import time
 import uuid
@@ -11,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
+from loguru import logger
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
@@ -18,6 +20,24 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
+
+# ── 日志配置 ──────────────────────────────────────────────────
+logger.remove()
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format="<green>{time:HH:mm:ss}</green> | <level>{level:<7}</level> | {message}",
+)
+LOG_DIR = Path("./logs")
+LOG_DIR.mkdir(exist_ok=True)
+logger.add(
+    str(LOG_DIR / "server_{time:YYYY-MM-DD}.log"),
+    level="DEBUG",
+    rotation="00:00",
+    retention="7 days",
+    encoding="utf-8",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level:<7} | {name}:{line} | {message}",
+)
 
 
 def _content_disposition(filename: str) -> str:
@@ -66,6 +86,13 @@ class UploadResponse(BaseModel):
 
 class UrlRequest(BaseModel):
     url: str
+    asr_model: str | None = None
+    llm_model: str | None = None
+
+
+class UploadRequest(BaseModel):
+    asr_model: str | None = None
+    llm_model: str | None = None
 
 
 # ── Task Store ───────────────────────────────────────────────
@@ -87,8 +114,9 @@ def _update(task_id: str, **kw):
 # ── Audio Processing (background thread) ─────────────────────
 
 
-def _process_audio(task_id: str, file_path: Path):
+def _process_audio(task_id: str, file_path: Path, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理音频文件"""
+    logger.info(f"[任务 {task_id}] 开始处理音频: {file_path.name}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, save_asr_cache, save_summary_cache, load_asr_cache, load_summary_cache
         from agent.asr_client import ASRClient
@@ -105,19 +133,24 @@ def _process_audio(task_id: str, file_path: Path):
         from utils.audio import preprocess_audio
 
         audio_stem = get_audio_stem(str(file_path))
+        logger.info(f"[任务 {task_id}] 音频 stem: {audio_stem}")
         _update(task_id, step="正在预处理音频...", progress=10)
 
         # 1. 预处理
+        logger.info(f"[任务 {task_id}] 开始预处理音频...")
         _update(task_id, step="正在预处理音频...", progress=15)
         preprocessed = preprocess_audio(
             file_path, sample_rate=settings.asr_sample_rate)
+        logger.info(f"[任务 {task_id}] 预处理完成: {preprocessed.name}")
 
         # 2. ASR
+        logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
         _update(task_id, step="正在语音转写...", progress=35)
-        asr = ASRClient()
+        asr = ASRClient(models=[asr_model] if asr_model else None)
         t0 = time.time()
         transcript = asyncio.run(asr.transcribe(str(preprocessed)))
         asr_duration = time.time() - t0
+        logger.info(f"[任务 {task_id}] ASR 转写完成, 耗时 {asr_duration:.1f}s")
 
         # 清理预处理文件
         try:
@@ -130,26 +163,31 @@ def _process_audio(task_id: str, file_path: Path):
         transcript_text = cleaned.formatted_text
 
         if not transcript_text.strip():
+            logger.warning(f"[任务 {task_id}] ASR 转写结果为空")
             _update(task_id, status="failed", error="ASR 转写结果为空")
             return
 
         # 保存 ASR 缓存
         asr_path = save_asr_cache(transcript_text, audio_stem)
         _update(task_id, asr_result_path=str(asr_path))
+        logger.info(f"[任务 {task_id}] ASR 缓存已保存")
 
         # 3. 分类
+        logger.info(f"[任务 {task_id}] 开始分类...")
         _update(task_id, step="正在识别录音类型...", progress=50)
         rec_type = asyncio.run(classify_recording(transcript_text))
+        logger.info(f"[任务 {task_id}] 分类结果: {rec_type}")
 
         # 4. 分析
         llm_start = time.time()
+        logger.info(f"[任务 {task_id}] 开始 LLM 分析 (类型={rec_type})...")
         total_start = time.time() - asr_duration  # 近似
         type_labels = {"meeting": "会议录音",
                        "interview": "面试录音", "general": "其他录音"}
         _update(
             task_id, step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...", progress=60)
 
-        llm = LLMClient()
+        llm = LLMClient(models=[llm_model] if llm_model else None)
 
         if rec_type == "meeting":
             prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
@@ -171,7 +209,7 @@ def _process_audio(task_id: str, file_path: Path):
                 result_raw["a_data"], None, timing_info)
             # 面试保存为目录
             result_dir = RESULT_DIR / "interview" / \
-                f"{audio_stem}_{settings.asr_model}_{settings.llm_model}"
+                f"{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
             result_dir.mkdir(parents=True, exist_ok=True)
             (result_dir / "question.md").write_text(q_md, encoding="utf-8")
             (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
@@ -187,16 +225,19 @@ def _process_audio(task_id: str, file_path: Path):
             _save_result(task_id, audio_stem, "other", output_text)
 
         _update(task_id, status="completed", progress=100, step="分析完成")
+        logger.info(f"[任务 {task_id}] 处理完成")
 
     except Exception as e:
+        logger.error(f"[任务 {task_id}] 处理失败: {e}", exc_info=True)
         _update(task_id, status="failed", error=str(e), step="处理失败")
 
 
 # ── Video Processing (background thread) ─────────────────────
 
 
-def _process_video(task_id: str, file_path: Path):
+def _process_video(task_id: str, file_path: Path, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理视频文件"""
+    logger.info(f"[任务 {task_id}] 开始处理视频: {file_path.name}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, sanitize_stem, save_asr_cache, save_summary_cache, load_asr_cache, load_summary_cache
         from agent.video_client import get_video_info, extract_audio_from_video
@@ -210,34 +251,42 @@ def _process_video(task_id: str, file_path: Path):
         video_title = None
 
         # 1. 视频信息
+        logger.info(f"[任务 {task_id}] 获取视频信息...")
         _update(task_id, step="正在获取视频信息...", progress=5)
         video_info = asyncio.run(get_video_info(source))
         if video_info:
             video_title = video_info.get("title", "")
+            logger.info(f"[任务 {task_id}] 视频标题: {video_title}")
             if video_title:
                 video_stem = sanitize_stem(video_title)
             _update(task_id, video_title=video_title)
 
         # 2. 提取音频
+        logger.info(f"[任务 {task_id}] 提取音频...")
         _update(task_id, step="正在提取音频...", progress=15)
         audio_path = asyncio.run(extract_audio_from_video(
             source, filename_stem=video_stem))
+        logger.info(f"[任务 {task_id}] 音频提取完成: {audio_path.name}")
 
         # 3. 预处理
+        logger.info(f"[任务 {task_id}] 预处理音频...")
         _update(task_id, step="正在预处理音频...", progress=25)
         preprocessed = preprocess_audio(
             audio_path, sample_rate=settings.asr_sample_rate)
+        logger.info(f"[任务 {task_id}] 预处理完成: {preprocessed.name}")
         try:
             audio_path.unlink()
         except Exception:
             pass
 
         # 4. ASR
+        logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
         _update(task_id, step="正在语音转写...", progress=35)
-        asr = ASRClient()
+        asr = ASRClient(models=[asr_model] if asr_model else None)
         t0 = time.time()
         transcript = asyncio.run(asr.transcribe(str(preprocessed)))
         asr_duration = time.time() - t0
+        logger.info(f"[任务 {task_id}] ASR 转写完成, 耗时 {asr_duration:.1f}s")
 
         try:
             preprocessed.unlink()
@@ -249,6 +298,7 @@ def _process_video(task_id: str, file_path: Path):
         transcript_text = cleaned.formatted_text
 
         if not transcript_text.strip():
+            logger.warning(f"[任务 {task_id}] ASR 转写结果为空")
             _update(task_id, status="failed", error="ASR 转写结果为空")
             return
 
@@ -256,6 +306,7 @@ def _process_video(task_id: str, file_path: Path):
         _update(task_id, asr_result_path=str(asr_path))
 
         # 5. LLM 分析
+        logger.info(f"[任务 {task_id}] 开始 LLM 分析...")
         _update(task_id, step="正在分析内容...", progress=65)
         llm_start = time.time()
 
@@ -263,6 +314,7 @@ def _process_video(task_id: str, file_path: Path):
         if cached is not None:
             output_text = cached
         else:
+            llm = LLMClient(models=[llm_model] if llm_model else None)
             data = asyncio.run(analyze_general(transcript_text))
             timing_info = _build_timing(asr_duration, llm_start)
             output_text = format_general_result(data, None, timing_info)
@@ -270,8 +322,10 @@ def _process_video(task_id: str, file_path: Path):
 
         _save_result(task_id, video_stem, "video", output_text)
         _update(task_id, status="completed", progress=100, step="分析完成")
+        logger.info(f"[任务 {task_id}] 视频处理完成")
 
     except Exception as e:
+        logger.error(f"[任务 {task_id}] 视频处理失败: {e}", exc_info=True)
         _update(task_id, status="failed", error=str(e), step="处理失败")
 
 
@@ -289,7 +343,7 @@ def _build_timing(asr_duration: float, llm_start: float) -> dict:
 
 def _save_result(task_id: str, stem: str, subdir: str, text: str):
     result_path = RESULT_DIR / subdir / \
-        f"{stem}_{settings.asr_model}_{settings.llm_model}.md"
+        f"{stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(text, encoding="utf-8")
     _update(task_id, result_path=str(result_path))
@@ -313,7 +367,11 @@ VIDEO_DOMAINS = {
 
 
 @app.post("/api/upload", response_model=UploadResponse)
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    asr_model: str | None = None,
+    llm_model: str | None = None,
+):
     """上传音视频文件，创建后台处理任务"""
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
@@ -341,11 +399,13 @@ async def upload_file(file: UploadFile = File(...)):
             "filename": file.filename or "",
             "file_type": file_type,
             "video_title": None,
+            "asr_model": asr_model,
+            "llm_model": llm_model,
         }
 
     target = _process_video if file_type == "video" else _process_audio
     threading.Thread(target=target, args=(
-        task_id, file_path), daemon=True).start()
+        task_id, file_path, asr_model, llm_model), daemon=True).start()
 
     return UploadResponse(task_id=task_id, filename=file.filename or "", file_type=file_type)
 
@@ -392,10 +452,10 @@ async def submit_url(req: UrlRequest):
 
     if is_video:
         threading.Thread(target=_process_video_url, args=(
-            task_id, url), daemon=True).start()
+            task_id, url, req.asr_model, req.llm_model), daemon=True).start()
     else:
         threading.Thread(target=_process_audio_url, args=(
-            task_id, url), daemon=True).start()
+            task_id, url, req.asr_model, req.llm_model), daemon=True).start()
 
     return {"task_id": task_id, "filename": display_name, "file_type": file_type}
 
@@ -403,12 +463,14 @@ async def submit_url(req: UrlRequest):
 # ── URL Processing (background threads) ─────────────────────
 
 
-def _process_video_url(task_id: str, url: str):
+def _process_video_url(task_id: str, url: str, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理视频 URL"""
+    logger.info(f"[任务 {task_id}] 开始处理视频 URL: {url[:80]}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, sanitize_stem, save_asr_cache, save_summary_cache, load_summary_cache
         from agent.video_client import get_video_info, extract_audio_from_video
         from agent.asr_client import ASRClient
+        from agent.llm_client import LLMClient
         from agent.text_processor import TextProcessor
         from agent.pipeline import analyze_general, format_general_result
         from utils.audio import preprocess_audio
@@ -417,35 +479,43 @@ def _process_video_url(task_id: str, url: str):
         video_title = None
 
         # 1. 视频信息
+        logger.info(f"[任务 {task_id}] 获取视频信息...")
         _update(task_id, step="正在获取视频信息...", progress=5)
         video_info = asyncio.run(get_video_info(url))
         if video_info:
             video_title = video_info.get("title", "")
+            logger.info(f"[任务 {task_id}] 视频标题: {video_title}")
             if video_title:
                 video_stem = sanitize_stem(video_title)
             _update(task_id, video_title=video_title,
                     filename=video_title or url[:60])
 
         # 2. 提取音频
+        logger.info(f"[任务 {task_id}] 提取音频...")
         _update(task_id, step="正在提取音频...", progress=15)
         audio_path = asyncio.run(
             extract_audio_from_video(url, filename_stem=video_stem))
+        logger.info(f"[任务 {task_id}] 音频提取完成: {audio_path.name}")
 
         # 3. 预处理
+        logger.info(f"[任务 {task_id}] 预处理音频...")
         _update(task_id, step="正在预处理音频...", progress=25)
         preprocessed = preprocess_audio(
             audio_path, sample_rate=settings.asr_sample_rate)
+        logger.info(f"[任务 {task_id}] 预处理完成: {preprocessed.name}")
         try:
             audio_path.unlink()
         except Exception:
             pass
 
         # 4. ASR
+        logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
         _update(task_id, step="正在语音转写...", progress=35)
-        asr = ASRClient()
+        asr = ASRClient(models=[asr_model] if asr_model else None)
         t0 = time.time()
         transcript = asyncio.run(asr.transcribe(str(preprocessed)))
         asr_duration = time.time() - t0
+        logger.info(f"[任务 {task_id}] ASR 转写完成, 耗时 {asr_duration:.1f}s")
         try:
             preprocessed.unlink()
         except Exception:
@@ -461,12 +531,14 @@ def _process_video_url(task_id: str, url: str):
         _update(task_id, asr_result_path=str(asr_path))
 
         # 5. LLM 分析
+        logger.info(f"[任务 {task_id}] 开始 LLM 分析...")
         _update(task_id, step="正在分析内容...", progress=65)
         llm_start = time.time()
         cached = load_summary_cache(video_stem, rec_type="video")
         if cached is not None:
             output_text = cached
         else:
+            llm = LLMClient(models=[llm_model] if llm_model else None)
             data = asyncio.run(analyze_general(transcript_text))
             timing_info = _build_timing(asr_duration, llm_start)
             output_text = format_general_result(data, None, timing_info)
@@ -474,13 +546,16 @@ def _process_video_url(task_id: str, url: str):
 
         _save_result(task_id, video_stem, "video", output_text)
         _update(task_id, status="completed", progress=100, step="分析完成")
+        logger.info(f"[任务 {task_id}] 视频 URL 处理完成")
 
     except Exception as e:
+        logger.error(f"[任务 {task_id}] 视频 URL 处理失败: {e}", exc_info=True)
         _update(task_id, status="failed", error=str(e), step="处理失败")
 
 
-def _process_audio_url(task_id: str, url: str):
+def _process_audio_url(task_id: str, url: str, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理音频 URL"""
+    logger.info(f"[任务 {task_id}] 开始处理音频 URL: {url[:80]}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, save_asr_cache, save_summary_cache, load_asr_cache
         from agent.asr_client import ASRClient
@@ -496,12 +571,15 @@ def _process_audio_url(task_id: str, url: str):
         from models.schemas import MeetingResult
 
         audio_stem = get_audio_stem(url)
+        logger.info(f"[任务 {task_id}] 音频 stem: {audio_stem}")
+        logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
         _update(task_id, step="正在语音转写...", progress=35)
 
-        asr = ASRClient()
+        asr = ASRClient(models=[asr_model] if asr_model else None)
         t0 = time.time()
         transcript = asyncio.run(asr.transcribe(url))
         asr_duration = time.time() - t0
+        logger.info(f"[任务 {task_id}] ASR 转写完成, 耗时 {asr_duration:.1f}s")
 
         processor = TextProcessor()
         cleaned = processor.clean(transcript)
@@ -514,14 +592,16 @@ def _process_audio_url(task_id: str, url: str):
 
         _update(task_id, step="正在识别录音类型...", progress=50)
         rec_type = asyncio.run(classify_recording(transcript_text))
+        logger.info(f"[任务 {task_id}] 分类结果: {rec_type}")
 
         llm_start = time.time()
+        logger.info(f"[任务 {task_id}] 开始 LLM 分析...")
         type_labels = {"meeting": "会议录音",
                        "interview": "面试录音", "general": "其他录音"}
         _update(
             task_id, step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...", progress=60)
 
-        llm = LLMClient()
+        llm = LLMClient(models=[llm_model] if llm_model else None)
         if rec_type == "meeting":
             prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
             data = asyncio.run(llm.chat_json(prompt))
@@ -537,7 +617,7 @@ def _process_audio_url(task_id: str, url: str):
             a_md = format_interview_analysis(
                 result_raw["a_data"], None, timing_info)
             result_dir = RESULT_DIR / "interview" / \
-                f"{audio_stem}_{settings.asr_model}_{settings.llm_model}"
+                f"{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
             result_dir.mkdir(parents=True, exist_ok=True)
             (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
             _update(task_id, status="completed", progress=100, step="分析完成",
@@ -551,8 +631,10 @@ def _process_audio_url(task_id: str, url: str):
             _save_result(task_id, audio_stem, "other", output_text)
 
         _update(task_id, status="completed", progress=100, step="分析完成")
+        logger.info(f"[任务 {task_id}] 音频 URL 处理完成")
 
     except Exception as e:
+        logger.error(f"[任务 {task_id}] 音频 URL 处理失败: {e}", exc_info=True)
         _update(task_id, status="failed", error=str(e), step="处理失败")
 
 
@@ -624,6 +706,15 @@ async def download_asr_result(task_id: str):
     text = Path(asr_path).read_text(encoding="utf-8")
     return PlainTextResponse(text, media_type="text/plain",
                              headers={"Content-Disposition": _content_disposition(Path(asr_path).name)})
+
+
+@app.get("/api/models")
+async def get_models():
+    """获取可用的 ASR 和 LLM 模型列表"""
+    return {
+        "asr_models": settings.asr_models,
+        "llm_models": settings.llm_models,
+    }
 
 
 @app.get("/api/health")

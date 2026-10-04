@@ -25,13 +25,16 @@ class ASRClient:
     )
     UPLOAD_URL = "https://dashscope.aliyuncs.com/api/v1/uploads"
 
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, models: list[str] | None = None):
         self.api_key = api_key or settings.dashscope_api_key
         if not self.api_key:
             raise ValueError(
                 "请配置 DASHSCOPE_API_KEY，可在 .env 文件或环境变量中设置"
             )
-        self.model = settings.asr_model
+        self.models = models or settings.asr_models
+        if not self.models:
+            raise ValueError("ASR 模型列表为空")
+        self.model = self.models[0]  # 默认使用第一个
 
     def _headers(self) -> dict:
         return {
@@ -40,7 +43,7 @@ class ASRClient:
 
     async def transcribe(self, audio_source: str | Path) -> Transcript:
         """
-        转写音频。
+        转写音频，支持模型列表自动 fallback。
 
         Args:
             audio_source: 本地音频文件路径 或 可访问的音频 URL
@@ -61,9 +64,25 @@ class ASRClient:
             logger.info(f"上传本地文件获取临时 URL: {audio_path.name}")
             audio_url = await self._upload_file(audio_path)
 
+        # 尝试每个模型，失败则 fallback 到下一个
+        last_error = None
+        for model in self.models:
+            self.model = model
+            try:
+                return await self._transcribe_with_model(audio_url)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"ASR 模型 {model} 失败: {e}，尝试下一个...")
+                if model != self.models[-1]:
+                    continue
+                raise RuntimeError(
+                    f"所有 ASR 模型均失败。最后一个错误 ({model}): {last_error}"
+                ) from last_error
+
+    async def _transcribe_with_model(self, audio_url: str) -> Transcript:
+        """使用当前 self.model 执行单次转写"""
         logger.info(f"开始 ASR 转写, 模型: {self.model}")
 
-        # 提交转写任务
         payload = {
             "model": self.model,
             "input": {
@@ -77,9 +96,7 @@ class ASRClient:
         }
 
         headers = {**self._headers(), "Content-Type": "application/json"}
-        # DashScope 异步任务需要设置 X-DashScope-Async: enable
         headers["X-DashScope-Async"] = "enable"
-        # 如果音频 URL 是 oss:// 前缀 (DashScope 临时存储), 需要此头
         if audio_url.startswith("oss://"):
             headers["X-DashScope-OssResourceResolve"] = "enable"
 
@@ -91,10 +108,8 @@ class ASRClient:
             resp.raise_for_status()
             result = resp.json()
 
-            # 获取 task_id 并轮询结果
             task_id = result.get("output", {}).get("task_id")
             if not task_id:
-                # 可能是同步返回了结果
                 return self._parse_response(result)
 
             logger.info(f"异步任务已提交，task_id: {task_id}")

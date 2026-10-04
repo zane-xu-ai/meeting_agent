@@ -70,7 +70,7 @@ def _rec_type_to_subdir(rec_type: str) -> str:
 
 def _asr_cache_path(audio_stem: str, asr_model: str | None = None) -> Path:
     """ASR 缓存文件路径"""
-    model = asr_model or settings.asr_model
+    model = asr_model or settings.asr_models[0]
     return settings.output_dir / "asr" / f"{audio_stem}_{model}.txt"
 
 
@@ -105,8 +105,8 @@ def _summary_cache_path(
     llm_model: str | None = None,
 ) -> Path:
     """Summary 缓存文件路径 (会议/通用类型)"""
-    am = asr_model or settings.asr_model
-    lm = llm_model or settings.llm_model
+    am = asr_model or settings.asr_models[0]
+    lm = llm_model or settings.llm_models[0]
     subdir = _rec_type_to_subdir(rec_type)
     return settings.output_dir / "summary" / subdir / f"{audio_stem}_{am}_{lm}.md"
 
@@ -152,8 +152,8 @@ def _interview_cache_dir(
     llm_model: str | None = None,
 ) -> Path:
     """面试录音缓存目录路径"""
-    am = asr_model or settings.asr_model
-    lm = llm_model or settings.llm_model
+    am = asr_model or settings.asr_models[0]
+    lm = llm_model or settings.llm_models[0]
     return settings.output_dir / "summary" / "interview" / f"{audio_stem}_{am}_{lm}"
 
 

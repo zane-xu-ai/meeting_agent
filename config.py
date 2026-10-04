@@ -1,10 +1,31 @@
 """会议助手智能体 - 配置管理"""
 
 from pathlib import Path
+from typing import List
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 from pydantic import Field
+
+
+# 默认模型列表
+DEFAULT_ASR_MODELS: List[str] = [
+    "paraformer-v2",
+    "paraformer-v1",
+    "qwen-audio-3.0-asr-flash-filetrans",
+    "qwen-audio-3.1-asr-flash-filetrans",
+]
+
+DEFAULT_LLM_MODELS: List[str] = [
+    "qwen3.7-flash-2026-07-15",
+    "qwen3.7-flash",
+    "deepseek-v4-flash-0731",
+    "qwen3.8-max",
+    "glm-5.3",
+    "qwen3.8-flash",
+    "qwen3.8-max-0902",
+    "deepseek-v4.1-flash",
+]
 
 
 class Settings(BaseSettings):
@@ -20,10 +41,12 @@ class Settings(BaseSettings):
         default="https://dashscope.aliyuncs.com/compatible-mode/v1",
         description="LLM API Base URL",
     )
-    llm_model: str = Field(default="qwen-plus", description="LLM 模型名称")
+    llm_models: List[str] = Field(
+        default=DEFAULT_LLM_MODELS, description="LLM 模型列表，按优先级排序")
 
     # ASR 配置
-    asr_model: str = Field(default="paraformer-v2", description="ASR 模型名称")
+    asr_models: List[str] = Field(
+        default=DEFAULT_ASR_MODELS, description="ASR 模型列表，按优先级排序")
     asr_sample_rate: int = Field(default=16000, description="音频采样率")
 
     # 文本处理

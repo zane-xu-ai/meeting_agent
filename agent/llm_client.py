@@ -18,11 +18,14 @@ class LLMClient:
         self,
         api_key: str | None = None,
         base_url: str | None = None,
-        model: str | None = None,
+        models: list[str] | None = None,
     ):
         self.api_key = api_key or settings.llm_api_key
         self.base_url = (base_url or settings.llm_base_url).rstrip("/")
-        self.model = model or settings.llm_model
+        self.models = models or settings.llm_models
+        if not self.models:
+            raise ValueError("LLM 模型列表为空")
+        self.model = self.models[0]  # 默认使用第一个
 
         if not self.api_key:
             raise ValueError(
@@ -32,7 +35,7 @@ class LLMClient:
 
         self.chat_url = f"{self.base_url}/chat/completions"
         logger.info(
-            f"LLM 客户端初始化: model={self.model}, base_url={self.base_url}")
+            f"LLM 客户端初始化: models={self.models}, base_url={self.base_url}")
 
     async def chat(
         self,
@@ -42,7 +45,7 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> str:
         """
-        发送单轮对话请求。
+        发送单轮对话请求，支持模型列表自动 fallback。
 
         Args:
             prompt: 用户 prompt
@@ -53,6 +56,28 @@ class LLMClient:
         Returns:
             模型输出文本
         """
+        last_error = None
+        for model in self.models:
+            self.model = model
+            try:
+                return await self._chat_with_model(prompt, system, temperature, max_tokens)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"LLM 模型 {model} 失败: {e}，尝试下一个...")
+                if model != self.models[-1]:
+                    continue
+                raise RuntimeError(
+                    f"所有 LLM 模型均失败。最后一个错误 ({model}): {last_error}"
+                ) from last_error
+
+    async def _chat_with_model(
+        self,
+        prompt: str,
+        system: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """使用当前 self.model 执行单次对话"""
         payload = {
             "model": self.model,
             "messages": [
@@ -77,7 +102,7 @@ class LLMClient:
         content = result["choices"][0]["message"]["content"]
         usage = result.get("usage", {})
         logger.info(
-            f"LLM 响应: prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"LLM 响应: model={self.model}, prompt_tokens={usage.get('prompt_tokens', '?')}, "
             f"completion_tokens={usage.get('completion_tokens', '?')}"
         )
         return content
