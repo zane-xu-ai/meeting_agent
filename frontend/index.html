@@ -75,7 +75,7 @@
     #app {
       max-width: 960px;
       margin: 0 auto;
-      padding: 0 24px 80px;
+      padding: 0 24px 40px;
     }
 
     /* ── Header ─────────────────────────────── */
@@ -83,9 +83,9 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 28px 0 32px;
+      padding: 18px 0 16px;
       border-bottom: 1px solid var(--border);
-      margin-bottom: 40px;
+      margin-bottom: 24px;
     }
 
     .header-left {
@@ -179,7 +179,7 @@
 
     /* ── Upload Zone ────────────────────────── */
     .upload-section {
-      margin-bottom: 32px;
+      margin-bottom: 20px;
     }
 
     .tab-bar {
@@ -310,7 +310,7 @@
       position: relative;
       border: 2px dashed var(--border);
       border-radius: var(--radius);
-      padding: 56px 32px;
+      padding: 36px 32px;
       text-align: center;
       cursor: pointer;
       transition: all 0.3s ease;
@@ -817,9 +817,9 @@
 
     /* ── Model Selector ─────────────────────── */
     .model-selector {
-      margin-top: 20px;
+      margin-top: 16px;
       margin-bottom: 0;
-      padding: 16px;
+      padding: 14px;
       background: var(--bg-secondary);
       border: 1px solid var(--border);
       border-radius: var(--radius-sm);
@@ -945,9 +945,12 @@
         </div>
       </div>
       <div class="header-right">
-        <div style="display:flex;align-items:center;gap:6px;">
-          <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
-          <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
+            <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
+          </div>
+          <span style="font-size:11px;color:var(--text-muted);">v2.0.10</span>
         </div>
         <button class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
