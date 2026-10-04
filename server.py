@@ -116,7 +116,8 @@ def _update(task_id: str, **kw):
 
 def _process_audio(task_id: str, file_path: Path, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理音频文件"""
-    logger.info(f"[任务 {task_id}] 开始处理音频: {file_path.name}, asr_model={asr_model}, llm_model={llm_model}")
+    logger.info(
+        f"[任务 {task_id}] 开始处理音频: {file_path.name}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, save_asr_cache, save_summary_cache, load_asr_cache, load_summary_cache
         from agent.asr_client import ASRClient
@@ -237,7 +238,8 @@ def _process_audio(task_id: str, file_path: Path, asr_model: str | None = None, 
 
 def _process_video(task_id: str, file_path: Path, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理视频文件"""
-    logger.info(f"[任务 {task_id}] 开始处理视频: {file_path.name}, asr_model={asr_model}, llm_model={llm_model}")
+    logger.info(
+        f"[任务 {task_id}] 开始处理视频: {file_path.name}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, sanitize_stem, save_asr_cache, save_summary_cache, load_asr_cache, load_summary_cache
         from agent.video_client import get_video_info, extract_audio_from_video
@@ -465,7 +467,8 @@ async def submit_url(req: UrlRequest):
 
 def _process_video_url(task_id: str, url: str, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理视频 URL"""
-    logger.info(f"[任务 {task_id}] 开始处理视频 URL: {url[:80]}, asr_model={asr_model}, llm_model={llm_model}")
+    logger.info(
+        f"[任务 {task_id}] 开始处理视频 URL: {url[:80]}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, sanitize_stem, save_asr_cache, save_summary_cache, load_summary_cache
         from agent.video_client import get_video_info, extract_audio_from_video
@@ -555,7 +558,8 @@ def _process_video_url(task_id: str, url: str, asr_model: str | None = None, llm
 
 def _process_audio_url(task_id: str, url: str, asr_model: str | None = None, llm_model: str | None = None):
     """后台线程: 处理音频 URL"""
-    logger.info(f"[任务 {task_id}] 开始处理音频 URL: {url[:80]}, asr_model={asr_model}, llm_model={llm_model}")
+    logger.info(
+        f"[任务 {task_id}] 开始处理音频 URL: {url[:80]}, asr_model={asr_model}, llm_model={llm_model}")
     try:
         from agent.cache import get_audio_stem, save_asr_cache, save_summary_cache, load_asr_cache
         from agent.asr_client import ASRClient
