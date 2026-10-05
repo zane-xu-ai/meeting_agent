@@ -103,7 +103,7 @@ def _run_graph_pipeline(
         "asr_model": None,
         "llm_model": None,
         "task_id": task_id,
-        "audio_stem": get_audio_stem(source) if source_type != "url_audio" else "",
+        "audio_stem": get_audio_stem(source),
         "audio_path": None,
         "preprocessed_path": None,
         "asr_input": None,

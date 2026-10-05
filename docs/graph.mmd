@@ -1,32 +1,137 @@
 ---
 config:
   flowchart:
-    curve: linear
+    curve: basis
+    padding: 12
 ---
-graph TD;
-	__start__([<p>__start__</p>]):::first
-	extract_audio(extract_audio)
-	preprocess(preprocess)
-	asr_transcribe(asr_transcribe)
-	text_clean(text_clean)
-	classify(classify)
-	analyze_meeting(analyze_meeting)
-	analyze_interview(analyze_interview)
-	analyze_general(analyze_general)
-	format_output(format_output)
-	__end__([<p>__end__</p>]):::last
-	__start__ --> extract_audio;
-	analyze_general --> format_output;
-	analyze_interview --> format_output;
-	analyze_meeting --> format_output;
-	asr_transcribe --> text_clean;
-	classify -.-> analyze_general;
-	classify -.-> analyze_interview;
-	classify -.-> analyze_meeting;
-	extract_audio --> preprocess;
-	preprocess --> asr_transcribe;
-	text_clean --> classify;
-	format_output --> __end__;
-	classDef default fill:#f2f0ff,line-height:1.2
-	classDef first fill-opacity:0
-	classDef last fill:#bfb6fc
+graph TD
+    %% ═══════════════════════════════════════════════════════
+    %% 四种来源各自独立的处理路径
+    %% ═══════════════════════════════════════════════════════
+
+    subgraph src_audio["📁 本地音频 (local_audio)"]
+        A1["上传文件 → 保存 uploads/"]
+        A2["audio_stem = 文件名"]
+        A3["extract_audio: 跳过"]
+        A4["preprocess: ffmpeg → 16kHz WAV"]
+    end
+
+    subgraph src_video["🎬 本地视频 (local_video)"]
+        B1["上传文件 → 保存 uploads/"]
+        B2["audio_stem = 文件名"]
+        B3["extract_audio: ffmpeg 提取音频轨"]
+        B4["preprocess: ffmpeg → 16kHz WAV"]
+    end
+
+    subgraph src_url_audio["🔗 音频URL (url_audio)"]
+        C1["提交 URL"]
+        C2["audio_stem = URL路径提取"]
+        C3["extract_audio: 跳过"]
+        C4["preprocess: 跳过 (URL直传ASR)"]
+    end
+
+    subgraph src_url_video["🌐 视频URL (url_video)"]
+        D1["提交 URL"]
+        D2["获取视频标题 (yt-dlp)<br/>audio_stem = 标题清洗"]
+        D3["extract_audio: yt-dlp 下载+提取"]
+        D4["preprocess: ffmpeg → 16kHz WAV"]
+    end
+
+    %% ═══════════════════════════════════════════════════════
+    %% 汇聚到 LangGraph 公共流水线
+    %% ═══════════════════════════════════════════════════════
+
+    subgraph pipeline["LangGraph StateGraph 公共流水线"]
+        N1["asr_transcribe<br/>ASR 语音转写"]
+        N2["text_clean<br/>文本清洗 + ASR缓存保存"]
+        N3["classify<br/>LLM 分类 (视频源→跳过, 直接 general)"]
+    end
+
+    %% ─ 本地音频路径 ──
+    A1 --> A2 --> A3 --> A4 --> N1
+    %% ── 本地视频路径 ──
+    B1 --> B2 --> B3 --> B4 --> N1
+    %% ── URL音频路径 ──
+    C1 --> C2 --> C3 --> C4 --> N1
+    %% ─ URL视频路径 ──
+    D1 --> D2 --> D3 --> D4 --> N1
+
+    %% ── 公共流水线 ──
+    N1 --> N2
+    N2 --> N3
+
+    %% ═══════════════════════════════════════════════════════
+    %% 三种分析策略各自独立
+    %% ═══════════════════════════════════════════════════════
+
+    subgraph analyze_meeting[" meeting — 会议分析"]
+        M1["LLM 调用 MEETING_ANALYSIS_PROMPT<br/>提取: 参会人/主题/摘要/任务分工"]
+        M2["format_markdown 格式化"]
+        M3["save_summary_cache 缓存"]
+        M4["format_output → 保存结果"]
+        M5["summary/meeting/<br/>stem_asrModel_llmModel.md"]
+    end
+
+    subgraph analyze_interview["🎤 interview — 面试分析"]
+        I1["analyze_interview<br/>逐题评分 + 改进建议"]
+        I2["format_interview_questions<br/>生成 question.md"]
+        I3["format_interview_analysis<br/>生成 analyze.md"]
+        I4["直接写入目录 (不走 format_output)"]
+        I5["summary/interview/<br/>stem_model/<br/>├ question.md<br/>└ analyze.md"]
+    end
+
+    subgraph analyze_general["📝 general / video — 通用分析"]
+        G1["检查 summary 缓存"]
+        G2{"缓存命中?"}
+        G3["analyze_general<br/>LLM 生成摘要/章节/关键词"]
+        G4["format_general_result 格式化"]
+        G5["save_summary_cache 缓存"]
+        G6["format_output → 保存结果"]
+        G7["summary/video/<br/>或 summary/other/<br/>stem_asrModel_llmModel.md"]
+    end
+
+    %% ── 条件路由 ──
+    N3 -.->|"rec_type=meeting"| M1
+    N3 -.->|"rec_type=interview"| I1
+    N3 -.->|"rec_type=general"| G1
+
+    %% ── meeting 路径 ──
+    M1 --> M2 --> M3 --> M4 --> M5
+
+    %% ── interview 路径 ──
+    I1 --> I2
+    I1 --> I3
+    I2 --> I4
+    I3 --> I4
+    I4 --> I5
+
+    %% ── general 路径 ──
+    G1 --> G2
+    G2 -->|"是"| G6
+    G2 -->|"否"| G3 --> G4 --> G5 --> G6 --> G7
+
+    %% ── ASR 缓存输出 ──
+    N2 -.->|"ASR 缓存"| ASR["output/asr/<br/>stem_asrModel.txt"]
+
+    %% ══════════════════════════════════════════════════════
+    %% 样式
+    %% ═══════════════════════════════════════════════════════
+    classDef audioStyle fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    classDef videoStyle fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    classDef urlAudioStyle fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    classDef urlVideoStyle fill:#fce4ec,stroke:#e91e63,stroke-width:2px
+    classDef pipelineStyle fill:#f3e5f5,stroke:#9c27b0,stroke-width:2px
+    classDef meetingStyle fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef interviewStyle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    classDef generalStyle fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef asrStyle fill:#efebe9,stroke:#795548,stroke-width:2px
+
+    class A1,A2,A3,A4 audioStyle
+    class B1,B2,B3,B4 videoStyle
+    class C1,C2,C3,C4 urlAudioStyle
+    class D1,D2,D3,D4 urlVideoStyle
+    class N1,N2,N3 pipelineStyle
+    class M1,M2,M3,M4,M5 meetingStyle
+    class I1,I2,I3,I4,I5 interviewStyle
+    class G1,G2,G3,G4,G5,G6,G7 generalStyle
+    class ASR asrStyle

@@ -116,16 +116,38 @@ async def extract_audio(state: AgentState) -> dict:
 
     if source_type in ("local_video", "url_video"):
         from agent.video_client import extract_audio_from_video
-        from agent.cache import get_audio_stem
 
-        _notify(task_id, step="正在提取音频...", progress=15)
+        _notify(task_id, step="正在提取音频...", progress=10)
         logger.info(f"[任务 {task_id}] 从视频提取音频...")
 
+        filename_stem = state["audio_stem"]
+        updates: dict = {}
+
+        # URL 视频: 获取视频元信息，用标题作为文件名
+        if source_type == "url_video":
+            from agent.video_client import get_video_info
+            from agent.cache import sanitize_stem
+
+            video_info = await get_video_info(source)
+            if video_info:
+                title = video_info.get("title", "")
+                if title:
+                    new_stem = sanitize_stem(title)
+                    updates["video_title"] = title
+                    updates["audio_stem"] = new_stem
+                    filename_stem = new_stem
+                    _notify(task_id, video_title=title)
+                    logger.info(f"[任务 {task_id}] 视频标题: {title}")
+            else:
+                logger.warning(f"[任务 {task_id}] 无法获取视频信息，使用 URL stem")
+
         audio_path = await extract_audio_from_video(
-            source, filename_stem=state["audio_stem"])
+            source, filename_stem=filename_stem)
 
         logger.info(f"[任务 {task_id}] 音频提取完成: {audio_path.name}")
-        return {"audio_path": str(audio_path)}
+        _notify(task_id, step="音频提取完成", progress=22)
+        updates["audio_path"] = str(audio_path)
+        return updates
 
     # 音频源: 无需提取
     return {}
@@ -138,12 +160,12 @@ async def preprocess(state: AgentState) -> dict:
 
     # URL 音频直接传给 ASR，跳过预处理
     if source_type == "url_audio":
-        _notify(task_id, step="正在语音转写...", progress=35)
+        _notify(task_id, step="正在语音转写...", progress=38)
         return {"asr_input": state["source"]}
 
     # 本地音频 or 从视频提取的音频 → 预处理
     audio_path = state.get("audio_path") or state["source"]
-    _notify(task_id, step="正在预处理音频...", progress=20)
+    _notify(task_id, step="正在预处理音频...", progress=25)
     logger.info(f"[任务 {task_id}] 预处理音频: {Path(audio_path).name}")
 
     from utils.audio import preprocess_audio
@@ -160,7 +182,7 @@ async def preprocess(state: AgentState) -> dict:
         except Exception:
             pass
 
-    _notify(task_id, step="正在语音转写...", progress=35)
+    _notify(task_id, step="正在语音转写...", progress=38)
     return {
         "preprocessed_path": str(preprocessed),
         "asr_input": str(preprocessed),
@@ -173,6 +195,7 @@ async def asr_transcribe(state: AgentState) -> dict:
     asr_input = state["asr_input"]
 
     logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
+    _notify(task_id, step="正在语音转写...", progress=40)
 
     from agent.asr_client import ASRClient
 
@@ -222,7 +245,7 @@ async def text_clean(state: AgentState) -> dict:
 
     # 保存 ASR 缓存
     asr_path = save_asr_cache(cleaned_text, state["audio_stem"])
-    _notify(task_id, asr_result_path=str(asr_path))
+    _notify(task_id, asr_result_path=str(asr_path), step="转写完成，正在整理...", progress=58)
     logger.info(f"[任务 {task_id}] 文本预处理完成：{len(cleaned.sentences)} 句")
 
     return {"transcript_text": cleaned_text}
@@ -238,7 +261,7 @@ async def classify(state: AgentState) -> dict:
         logger.info(f"[任务 {task_id}] 视频源，跳过分类 (general)")
         return {"rec_type": "general"}
 
-    _notify(task_id, step="正在识别录音类型...", progress=50)
+    _notify(task_id, step="正在识别录音类型...", progress=62)
     logger.info(f"[任务 {task_id}] 开始分类...")
 
     from agent.classifier import classify_recording
@@ -265,14 +288,12 @@ async def analyze_dispatch(state: AgentState) -> dict:
     _notify(
         task_id,
         step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...",
-        progress=60,
+        progress=70,
     )
 
     llm_start = time.time()
     timing_info = _build_timing(state["asr_duration"], llm_start)
     audio_stem = state["audio_stem"]
-
-    result_handler = _result_handler_registry.get(task_id)
 
     # ── 会议录音 ──
     if rec_type == "meeting":
@@ -289,9 +310,6 @@ async def analyze_dispatch(state: AgentState) -> dict:
         output_text = format_markdown(
             result, event_time=None, timing_info=timing_info)
         save_summary_cache(output_text, audio_stem, rec_type="meeting")
-
-        if result_handler:
-            result_handler(task_id, audio_stem, "meeting", output_text)
 
         return {
             "output_text": output_text,
@@ -343,12 +361,6 @@ async def analyze_dispatch(state: AgentState) -> dict:
         output_text = format_general_result(data, None, timing_info)
         save_summary_cache(output_text, audio_stem, rec_type=rec_type)
 
-    if result_handler:
-        subdir = "video" if rec_type == "general" and state["source_type"] in (
-            "local_video", "url_video"
-        ) else "other"
-        result_handler(task_id, audio_stem, subdir, output_text)
-
     return {
         "output_text": output_text,
         "llm_start": llm_start,
@@ -356,18 +368,19 @@ async def analyze_dispatch(state: AgentState) -> dict:
 
 
 async def format_output(state: AgentState) -> dict:
-    """节点: 最终输出格式化 (确保结果路径已设置)"""
+    """节点: 最终输出 — 保存结果文件 (统一由本节点负责)"""
     task_id = state["task_id"]
 
-    # 如果 analyze_dispatch 已通过 result_handler 保存了结果路径，直接透传
+    # interview 分支已在 analyze_dispatch 中直接写入文件并设置 result_path
     if state.get("result_path"):
+        logger.info(f"[任务 {task_id}] 流水线执行完成")
         return {}
 
-    # 否则通过 result_handler 保存 (meeting / video / other)
+    # meeting / general / video 分支: 通过 result_handler 保存结果
     result_handler = _result_handler_registry.get(task_id)
     if result_handler and state.get("output_text"):
-        rec_type = state["rec_type"]
         source_type = state["source_type"]
+        rec_type = state["rec_type"]
 
         if rec_type == "meeting":
             subdir = "meeting"
