@@ -470,7 +470,8 @@ async def chat_with_task(task_id: str, req: ChatRequest):
         recent_history = history[-20:]  # 最近 10 轮 (每轮 user+assistant)
 
     # 追加当前用户消息到历史 (用于 token 计算)
-    current_messages = recent_history + [{"role": "user", "content": user_message}]
+    current_messages = recent_history + \
+        [{"role": "user", "content": user_message}]
 
     # 构建完整上下文 (token 预算自动分配)
     messages = ctx_mgr.build_chat_context(

@@ -43,7 +43,8 @@ class ContextManager:
             self._encoding = tiktoken.get_encoding(encoding_name)
             logger.info(f"ContextManager: 使用 {encoding_name} 编码器")
         except Exception as e:
-            logger.warning(f"ContextManager: 无法加载 {encoding_name}, 使用字符估算: {e}")
+            logger.warning(
+                f"ContextManager: 无法加载 {encoding_name}, 使用字符估算: {e}")
             self._encoding = None
 
     # ========== Token 计算 ==========
@@ -181,7 +182,8 @@ class ContextManager:
         )
 
         # 3. 截断 transcript 和 analysis
-        truncated_transcript = self.truncate_to_tokens(transcript, transcript_budget)
+        truncated_transcript = self.truncate_to_tokens(
+            transcript, transcript_budget)
         truncated_analysis = self.truncate_to_tokens(analysis, analysis_budget)
 
         # 4. 组装 system prompt
@@ -243,5 +245,6 @@ def get_context_manager(max_context_tokens: int = 120_000) -> ContextManager:
     """获取全局 ContextManager 实例"""
     global _context_manager
     if _context_manager is None:
-        _context_manager = ContextManager(max_context_tokens=max_context_tokens)
+        _context_manager = ContextManager(
+            max_context_tokens=max_context_tokens)
     return _context_manager

@@ -1786,8 +1786,7 @@
         </div>
         <div class="chat-input-area">
           <textarea class="chat-input" v-model="chatInput" placeholder="输入你的问题... (Enter 发送，Shift+Enter 换行)" rows="1"
-            @keydown.enter.exact.prevent="sendChat"
-            ref="chatInputEl"></textarea>
+            @keydown.enter.exact.prevent="sendChat" ref="chatInputEl"></textarea>
           <button class="chat-send-btn" @click="sendChat" :disabled="chatLoading || !chatInput.trim()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
               stroke-linejoin="round">
