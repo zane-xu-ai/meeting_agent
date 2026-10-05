@@ -190,7 +190,8 @@ async def preprocess(state: AgentState) -> dict:
     preprocessed, audio_duration = preprocess_audio(
         audio_path, sample_rate=settings.asr_sample_rate)
 
-    logger.info(f"[任务 {task_id}] 预处理完成: {preprocessed.name}, 时长 {audio_duration:.1f}s")
+    logger.info(
+        f"[任务 {task_id}] 预处理完成: {preprocessed.name}, 时长 {audio_duration:.1f}s")
 
     # 清理提取的临时音频文件 (视频路径)
     if state.get("audio_path"):
