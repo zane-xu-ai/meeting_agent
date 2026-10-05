@@ -153,7 +153,8 @@ def _process(task_id: str, source: str, source_type: str,
         register_result_handler(task_id, _save_result)
 
         # 构建初始状态
-        audio_stem = get_audio_stem(source) if source_type != "url_audio" else ""
+        audio_stem = get_audio_stem(
+            source) if source_type != "url_audio" else ""
 
         initial_state = {
             "source": source,

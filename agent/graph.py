@@ -34,7 +34,8 @@ class AgentState(TypedDict):
 
     # ── 输入 ──
     source: str                          # 文件路径 or URL
-    source_type: str                     # local_audio | local_video | url_audio | url_video
+    # local_audio | local_video | url_audio | url_video
+    source_type: str
     asr_model: str | None                # 用户选择的 ASR 模型 (None=自动)
     llm_model: str | None                # 用户选择的 LLM 模型 (None=自动)
     task_id: str                         # 任务 ID (用于进度回调和结果保存)
@@ -175,7 +176,8 @@ async def asr_transcribe(state: AgentState) -> dict:
 
     from agent.asr_client import ASRClient
 
-    asr = ASRClient(models=[state["asr_model"]] if state.get("asr_model") else None)
+    asr = ASRClient(models=[state["asr_model"]]
+                    if state.get("asr_model") else None)
     t0 = time.time()
     transcript = await asr.transcribe(asr_input)
     asr_duration = time.time() - t0
@@ -284,7 +286,8 @@ async def analyze_dispatch(state: AgentState) -> dict:
         prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
         data = await llm.chat_json(prompt)
         result = MeetingResult.model_validate(data)
-        output_text = format_markdown(result, event_time=None, timing_info=timing_info)
+        output_text = format_markdown(
+            result, event_time=None, timing_info=timing_info)
         save_summary_cache(output_text, audio_stem, rec_type="meeting")
 
         if result_handler:
@@ -305,8 +308,10 @@ async def analyze_dispatch(state: AgentState) -> dict:
         from pathlib import Path
 
         result_raw = await analyze_interview(transcript_text, llm_model=llm_model)
-        q_md = format_interview_questions(result_raw["q_data"], None, timing_info)
-        a_md = format_interview_analysis(result_raw["a_data"], None, timing_info)
+        q_md = format_interview_questions(
+            result_raw["q_data"], None, timing_info)
+        a_md = format_interview_analysis(
+            result_raw["a_data"], None, timing_info)
 
         # 面试保存为目录
         result_dir = (
@@ -371,7 +376,8 @@ async def format_output(state: AgentState) -> dict:
         else:
             subdir = "other"
 
-        result_handler(task_id, state["audio_stem"], subdir, state["output_text"])
+        result_handler(task_id, state["audio_stem"],
+                       subdir, state["output_text"])
 
     logger.info(f"[任务 {task_id}] 流水线执行完成")
     return {}
