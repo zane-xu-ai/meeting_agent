@@ -1,16 +1,23 @@
 """
-M4: Short-term Memory — 会话级记忆管理
+M4: Short-term Memory — 会话级记忆管理 (三层分级压缩)
 
-负责:
-- 每个 task_id 独立的对话历史管理
-- 滑动窗口: 基于 token 预算保留最近对话
-- 历史压缩: token 数超过阈值时，将早期对话压缩为摘要
-- 记忆持久化: 内存存储 (可扩展到 Redis/DB)
+压缩策略:
+  ┌───────────────────────────────────────────────────────────┐
+  │ L1: 工具输出即时蒸馏 (Tool Observation Pruning)            │
+  │     单条消息 > prune_threshold → 即刻截断/蒸馏              │
+  ├───────────────────────────────────────────────────────────┤
+  │ L2: 高低水位线滑动压缩 (High / Low Watermark)              │
+  │     总量 > high_watermark → 压缩到 low_watermark           │
+  │     类似 GC 的滞后机制，避免频繁压缩                        │
+  ├───────────────────────────────────────────────────────────┤
+  │ L3: 子任务里程碑归档 (Task Milestones)                     │
+  │     语义阶段性触发：完成一个子任务后归档当前对话为摘要        │
+  └───────────────────────────────────────────────────────────┘
 
 设计原则:
-- 所有窗口/阈值基于 token 数而非轮数，因为每轮对话长度差异巨大
-  (3 轮长对话可能 = 30k tokens，30 轮短对话可能 = 3k tokens)
-- 与 ContextManager (M3) 集成，复用 tiktoken 精确计算
+  - 所有阈值基于 token 数 (tiktoken)
+  - 压缩目标: 3000-5000 tokens
+  - 与 M3 ContextManager 集成，复用精确 token 计算
 """
 from __future__ import annotations
 
@@ -21,61 +28,170 @@ from loguru import logger
 from agent.context import get_context_manager
 
 
+# ═══════════════════════════════════════════════════════════════
+# 常量定义
+# ═══════════════════════════════════════════════════════════════
+
+# L1: 单条消息蒸馏阈值 (超过此值即刻截断)
+PRUNE_THRESHOLD = 2_000  # tokens
+
+# L2: 高低水位线
+HIGH_WATERMARK = 8_000   # tokens — 触发压缩
+LOW_WATERMARK = 4_000    # tokens — 压缩目标
+
+# L3: 里程碑归档保留量
+MILESTONE_KEEP_TOKENS = 2_000  # tokens — 归档后保留最近的消息
+
+
+# ═══════════════════════════════════════════════════════════════
+# L1: 工具输出即时蒸馏
+# ═══════════════════════════════════════════════════════════════
+
+def distill_message(content: str, max_tokens: int = PRUNE_THRESHOLD) -> str:
+    """
+    对单条过长消息进行即时蒸馏
+
+    当工具输出 (如 LLM 回复) 超过阈值时，立即截断并添加标记。
+    后续可升级为 LLM 摘要蒸馏。
+
+    Args:
+        content: 原始消息内容
+        max_tokens: 最大 token 数
+
+    Returns:
+        蒸馏后的消息内容
+    """
+    ctx = get_context_manager()
+    tokens = ctx.count_tokens(content)
+
+    if tokens <= max_tokens:
+        return content
+
+    # 截断到 max_tokens，保留首尾 (头部保留 70%，尾部保留 30%)
+    head_budget = int(max_tokens * 0.7)
+    tail_budget = int(max_tokens * 0.3)
+
+    if ctx._encoding:
+        encoded = ctx._encoding.encode(content)
+        head = ctx._encoding.decode(encoded[:head_budget])
+        tail = ctx._encoding.decode(encoded[-tail_budget:])
+    else:
+        # 降级: 按字符比例
+        ratio = max_tokens / tokens
+        char_limit = int(len(content) * ratio)
+        head_chars = int(char_limit * 0.7)
+        tail_chars = int(char_limit * 0.3)
+        head = content[:head_chars]
+        tail = content[-tail_chars:]
+
+    distilled = (
+        f"{head}\n\n"
+        f"[... 已蒸馏 {tokens - max_tokens} tokens ...]\n\n"
+        f"{tail}"
+    )
+    new_tokens = ctx.count_tokens(distilled)
+    logger.info(
+        f"[L1 蒸馏] {tokens} → {new_tokens} tokens "
+        f"({len(content)} → {len(distilled)} 字符)"
+    )
+    return distilled
+
+
+# ═══════════════════════════════════════════════════════════════
+# ConversationMemory — 单个任务的对话记忆
+# ═══════════════════════════════════════════════════════════════
+
+@dataclass
+class Milestone:
+    """里程碑记录"""
+    label: str
+    summary: str
+    message_index: int  # 归档时的消息索引
+    token_count: int    # 归档时的 token 数
+
+
 @dataclass
 class ConversationMemory:
     """
-    单个任务的对话记忆
+    单个任务的对话记忆 (三层分级压缩)
 
     结构:
-    - summary: 早期对话的压缩摘要 (可选)
-    - messages: 最近的对话历史 (滑动窗口)
-
-    压缩策略:
-    - 基于 token 数而非轮数，因为每轮对话长度差异巨大
-    - 当 messages 的总 token 数超过 compress_threshold_tokens 时触发压缩
-    - 压缩后保留最近 keep_token_budget 范围内的消息
+    - summary: 累积的全局摘要 (L2 压缩 + L3 归档)
+    - messages: 当前活跃消息列表
+    - milestones: 里程碑记录 (L3)
     """
     task_id: str
     summary: str = ""
     messages: list[dict] = field(default_factory=list)
-    compress_threshold_tokens: int = 50_000  # 超过 50k tokens 时触发压缩
-    keep_token_budget: int = 20_000  # 压缩后保留最近 20k tokens 的消息
+    milestones: list[Milestone] = field(default_factory=list)
 
-    def add_message(self, role: str, content: str) -> None:
-        """
-        添加一条消息到对话历史
+    # L1 配置
+    prune_threshold: int = PRUNE_THRESHOLD
 
-        Args:
-            role: "user" 或 "assistant"
-            content: 消息内容
-        """
-        self.messages.append({"role": role, "content": content})
-        logger.debug(f"[记忆 {self.task_id}] 添加消息: {role} ({len(content)} 字符)")
+    # L2 配置
+    high_watermark: int = HIGH_WATERMARK
+    low_watermark: int = LOW_WATERMARK
+
+    # L3 配置
+    milestone_keep_tokens: int = MILESTONE_KEEP_TOKENS
+
+    # ── Token 计算 ──────────────────────────────────────────
 
     def _count_tokens(self, text: str) -> int:
         """使用 ContextManager 计算 token 数"""
-        ctx_mgr = get_context_manager()
-        return ctx_mgr.count_tokens(text)
+        return get_context_manager().count_tokens(text)
 
     def get_token_count(self) -> int:
+        """计算当前 messages 的总 token 数"""
+        return sum(
+            self._count_tokens(msg.get("content", ""))
+            for msg in self.messages
+        )
+
+    def get_message_count(self) -> int:
+        """获取消息总数"""
+        return len(self.messages)
+
+    def get_round_count(self) -> int:
+        """获取对话轮数"""
+        return len(self.messages) // 2
+
+    # ── 消息添加 (自动触发 L1) ──────────────────────────────
+
+    def add_message(self, role: str, content: str) -> dict:
         """
-        计算当前 messages 的总 token 数
+        添加消息 (自动触发 L1 蒸馏)
+
+        Args:
+            role: "user" / "assistant" / "tool"
+            content: 消息内容
 
         Returns:
-            所有消息的 token 总数
+            实际存储的消息 (可能被 L1 蒸馏)
         """
-        total = 0
-        for msg in self.messages:
-            total += self._count_tokens(msg.get("content", ""))
-        return total
+        # L1: 对非用户消息进行即时蒸馏
+        # (用户消息不蒸馏，保持原始输入)
+        if role != "user" and self._count_tokens(content) > self.prune_threshold:
+            content = distill_message(content, self.prune_threshold)
+
+        msg = {"role": role, "content": content}
+        self.messages.append(msg)
+
+        logger.debug(
+            f"[记忆 {self.task_id}] 添加 {role}: "
+            f"{self._count_tokens(content)} tokens"
+        )
+        return msg
+
+    # ── 获取消息 ────────────────────────────────────────────
 
     def get_recent_messages_by_tokens(
-        self, token_budget: int = 20_000
+        self, token_budget: int = LOW_WATERMARK
     ) -> list[dict]:
         """
-        基于 token 预算获取最近的消息 (从尾部向前取，直到超出预算)
+        基于 token 预算获取最近的消息
 
-        这比固定轮数更精确：短对话保留更多轮，长对话保留更少轮。
+        从尾部向前取，直到超出预算。
 
         Args:
             token_budget: token 预算
@@ -87,84 +203,49 @@ class ConversationMemory:
             return []
 
         result: list[dict] = []
-        total_tokens = 0
+        total = 0
 
-        # 从尾部向前遍历
         for msg in reversed(self.messages):
-            msg_tokens = self._count_tokens(msg.get("content", ""))
-            if total_tokens + msg_tokens > token_budget and result:
-                break  # 超出预算，停止
+            t = self._count_tokens(msg.get("content", ""))
+            if total + t > token_budget and result:
+                break
             result.append(msg)
-            total_tokens += msg_tokens
+            total += t
 
-        result.reverse()  # 恢复时间顺序
-        logger.debug(
-            f"[记忆 {self.task_id}] token 窗口: "
-            f"{len(result)} 条消息, {total_tokens} tokens "
-            f"(预算 {token_budget})"
-        )
+        result.reverse()
         return result
 
-    def get_recent_messages(self, n_rounds: int = 10) -> list[dict]:
-        """
-        获取最近 N 轮对话 (每轮 = user + assistant)
-
-        注意: 这是简化接口，推荐用 get_recent_messages_by_tokens()
-
-        Args:
-            n_rounds: 轮数 (默认 10 轮 = 20 条消息)
-
-        Returns:
-            最近的消息列表
-        """
-        max_messages = n_rounds * 2
-        return self.messages[-max_messages:] if len(self.messages) > max_messages else self.messages.copy()
-
     def get_all_messages(self) -> list[dict]:
-        """
-        获取所有消息 (包括摘要)
-
-        Returns:
-            如果有摘要，返回 [summary_message] + messages
-            否则返回 messages 的拷贝
-        """
+        """获取所有消息 (包括全局摘要)"""
         if self.summary:
-            summary_msg = {
-                "role": "system",
-                "content": f"[早期对话摘要] {self.summary}"
-            }
-            return [summary_msg] + self.messages
+            return [
+                {"role": "system", "content": f"[对话摘要] {self.summary}"}
+            ] + self.messages
         return self.messages.copy()
 
-    def get_message_count(self) -> int:
-        """获取消息总数"""
-        return len(self.messages)
-
-    def get_round_count(self) -> int:
-        """获取对话轮数 (每轮 = user + assistant)"""
-        return len(self.messages) // 2
+    # ── L2: 高低水位线滑动压缩 ──────────────────────────────
 
     def needs_compression(self) -> bool:
         """
-        检查是否需要压缩 (基于 token 数)
+        L2: 检查是否需要压缩 (高水位线触发)
 
         Returns:
-            True 如果 messages 的总 token 数超过压缩阈值
+            True 如果总 token 数超过 high_watermark
         """
-        token_count = self.get_token_count()
-        if token_count > self.compress_threshold_tokens:
+        tokens = self.get_token_count()
+        if tokens > self.high_watermark:
             logger.info(
-                f"[记忆 {self.task_id}] 需要压缩: "
-                f"{token_count} tokens > {self.compress_threshold_tokens} 阈值"
+                f"[L2 水位线] {tokens} tokens > "
+                f"high_watermark {self.high_watermark}"
             )
             return True
         return False
 
-    def compress_early_messages(self) -> list[dict]:
+    def get_messages_to_compress(self) -> list[dict]:
         """
-        提取需要压缩的早期消息 (基于 token 预算)
+        L2: 获取需要压缩的早期消息
 
-        从头部开始取消息，直到剩余消息的 token 数 <= keep_token_budget
+        保留 low_watermark 以内的最近消息，其余返回用于压缩。
 
         Returns:
             需要压缩的早期消息列表
@@ -172,42 +253,37 @@ class ConversationMemory:
         if not self.messages:
             return []
 
-        # 计算总 token 数
-        total_tokens = self.get_token_count()
-        if total_tokens <= self.keep_token_budget:
-            return []  # 不需要压缩
+        # 从尾部向前，找到 low_watermark 边界
+        keep: list[dict] = []
+        keep_tokens = 0
 
-        # 从头部开始，找出需要压缩的消息
-        early_messages: list[dict] = []
-        remaining_tokens = total_tokens
-
-        for msg in self.messages:
-            msg_tokens = self._count_tokens(msg.get("content", ""))
-            # 如果去掉这条消息后，剩余 token 数在预算内，且还有更多消息
-            if remaining_tokens - msg_tokens <= self.keep_token_budget:
-                # 这条消息可能是最后一条需要压缩的，也可能不需要
-                # 检查去掉它之后剩余的消息是否足够
+        for msg in reversed(self.messages):
+            t = self._count_tokens(msg.get("content", ""))
+            if keep_tokens + t > self.low_watermark and keep:
                 break
-            early_messages.append(msg)
-            remaining_tokens -= msg_tokens
+            keep.append(msg)
+            keep_tokens += t
 
-        return early_messages
+        n_keep = len(keep)
+        if n_keep >= len(self.messages):
+            return []  # 全部保留，无需压缩
+
+        return self.messages[:-n_keep]
 
     def apply_compression(self, summary: str) -> None:
         """
-        应用压缩结果: 移除已压缩的早期消息，保留摘要
+        L2: 应用压缩结果
 
         Args:
-            summary: 早期对话的摘要
+            summary: 早期消息的摘要
         """
-        early_messages = self.compress_early_messages()
-        n_removed = len(early_messages)
-
-        if n_removed == 0:
-            logger.debug(f"[记忆 {self.task_id}] 无需压缩，消息已在预算内")
+        to_compress = self.get_messages_to_compress()
+        if not to_compress:
             return
 
-        # 保存摘要
+        n_removed = len(to_compress)
+
+        # 累积摘要
         if self.summary:
             self.summary = f"{self.summary}\n{summary}"
         else:
@@ -216,162 +292,185 @@ class ConversationMemory:
         # 移除已压缩的消息
         self.messages = self.messages[n_removed:]
 
-        remaining_tokens = self.get_token_count()
+        remaining = self.get_token_count()
         logger.info(
-            f"[记忆 {self.task_id}] 压缩完成: "
-            f"移除 {n_removed} 条消息, "
-            f"保留 {len(self.messages)} 条 ({remaining_tokens} tokens), "
-            f"摘要 {len(summary)} 字符"
+            f"[L2 压缩] 移除 {n_removed} 条消息, "
+            f"保留 {len(self.messages)} 条 ({remaining} tokens), "
+            f"摘要 +{len(summary)} 字符"
         )
+
+    # ── L3: 里程碑归档 ──────────────────────────────────────
+
+    def mark_milestone(self, label: str, summary: str = "") -> Milestone:
+        """
+        L3: 标记里程碑并归档当前对话
+
+        当一个子任务完成时调用，将当前对话压缩为摘要，
+        只保留最近的少量消息作为活跃上下文。
+
+        Args:
+            label: 里程碑标签 (如 "分析完成", "待办提取完成")
+            summary: 归档摘要 (为空则自动生成)
+
+        Returns:
+            Milestone 记录
+        """
+        current_tokens = self.get_token_count()
+
+        # 生成归档摘要
+        if not summary:
+            # 简单截取前几条消息作为摘要
+            early = self.messages[:-4] if len(self.messages) > 4 else []
+            if early:
+                texts = [m["content"][:200] for m in early[:6]]
+                summary = f"[{label}] " + " | ".join(texts)
+            else:
+                summary = f"[{label}] 对话归档"
+
+        # 保留最近的消息
+        keep: list[dict] = []
+        keep_tokens = 0
+        for msg in reversed(self.messages):
+            t = self._count_tokens(msg.get("content", ""))
+            if keep_tokens + t > self.milestone_keep_tokens and keep:
+                break
+            keep.append(msg)
+            keep_tokens += t
+
+        n_archived = len(self.messages) - len(keep)
+
+        # 记录里程碑
+        milestone = Milestone(
+            label=label,
+            summary=summary,
+            message_index=n_archived,
+            token_count=current_tokens,
+        )
+        self.milestones.append(milestone)
+
+        # 累积到全局摘要
+        if self.summary:
+            self.summary = f"{self.summary}\n{summary}"
+        else:
+            self.summary = summary
+
+        # 截断消息
+        self.messages = self.messages[-len(keep):] if keep else []
+
+        logger.info(
+            f"[L3 里程碑] '{label}': "
+            f"归档 {n_archived} 条消息, "
+            f"保留 {len(self.messages)} 条 ({keep_tokens} tokens)"
+        )
+        return milestone
+
+    # ── 通用方法 ────────────────────────────────────────────
 
     def clear(self) -> None:
         """清空记忆"""
         self.summary = ""
         self.messages = []
+        self.milestones = []
         logger.info(f"[记忆 {self.task_id}] 记忆已清空")
 
     def to_dict(self) -> dict:
-        """
-        序列化为字典
-
-        Returns:
-            {"task_id": str, "summary": str, "messages": list,
-             "rounds": int, "tokens": int}
-        """
+        """序列化为字典"""
         return {
             "task_id": self.task_id,
             "summary": self.summary,
             "messages": self.messages,
             "rounds": self.get_round_count(),
             "tokens": self.get_token_count(),
+            "milestones": [
+                {"label": m.label, "token_count": m.token_count}
+                for m in self.milestones
+            ],
         }
 
+
+# ═══════════════════════════════════════════════════════════════
+# MemoryManager — 全局记忆管理器
+# ═══════════════════════════════════════════════════════════════
 
 class MemoryManager:
     """
     全局记忆管理器
 
     管理所有任务的对话记忆，提供线程安全的访问。
+    集成三层压缩策略。
     """
 
     def __init__(
         self,
-        compress_threshold_tokens: int = 50_000,
-        keep_token_budget: int = 20_000,
+        prune_threshold: int = PRUNE_THRESHOLD,
+        high_watermark: int = HIGH_WATERMARK,
+        low_watermark: int = LOW_WATERMARK,
     ):
-        """
-        Args:
-            compress_threshold_tokens: 触发压缩的 token 阈值 (默认 50k)
-                当 messages 总 token 数超过此值时触发压缩
-            keep_token_budget: 压缩后保留的 token 预算 (默认 20k)
-                压缩后保留最近的 N 条消息，直到 token 数 <= 此值
-        """
         self._memories: dict[str, ConversationMemory] = {}
         self._lock = threading.Lock()
-        self._compress_threshold_tokens = compress_threshold_tokens
-        self._keep_token_budget = keep_token_budget
+        self._prune_threshold = prune_threshold
+        self._high_watermark = high_watermark
+        self._low_watermark = low_watermark
         logger.info(
             f"MemoryManager 初始化: "
-            f"compress_threshold={compress_threshold_tokens} tokens, "
-            f"keep_budget={keep_token_budget} tokens"
+            f"L1(prune={prune_threshold}), "
+            f"L2(high={high_watermark}, low={low_watermark}), "
+            f"L3(milestone_keep={MILESTONE_KEEP_TOKENS})"
         )
 
     def get_memory(self, task_id: str) -> ConversationMemory:
-        """
-        获取指定任务的记忆 (不存在则创建)
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            ConversationMemory 实例
-        """
+        """获取指定任务的记忆 (不存在则创建)"""
         with self._lock:
             if task_id not in self._memories:
                 self._memories[task_id] = ConversationMemory(
                     task_id=task_id,
-                    compress_threshold_tokens=self._compress_threshold_tokens,
-                    keep_token_budget=self._keep_token_budget,
+                    prune_threshold=self._prune_threshold,
+                    high_watermark=self._high_watermark,
+                    low_watermark=self._low_watermark,
                 )
                 logger.info(f"[记忆] 创建新记忆: task_id={task_id}")
             return self._memories[task_id]
 
-    def add_message(self, task_id: str, role: str, content: str) -> None:
-        """
-        添加消息到指定任务的记忆
-
-        Args:
-            task_id: 任务 ID
-            role: "user" 或 "assistant"
-            content: 消息内容
-        """
+    def add_message(self, task_id: str, role: str, content: str) -> dict:
+        """添加消息 (自动触发 L1 蒸馏)"""
         memory = self.get_memory(task_id)
-        memory.add_message(role, content)
+        return memory.add_message(role, content)
 
     def get_recent_messages(
-        self, task_id: str, token_budget: int = 20_000
+        self, task_id: str, token_budget: int = LOW_WATERMARK
     ) -> list[dict]:
-        """
-        获取指定任务的最近对话 (基于 token 预算)
-
-        Args:
-            task_id: 任务 ID
-            token_budget: token 预算 (默认 20k)
-
-        Returns:
-            预算内的最近消息列表
-        """
+        """获取最近消息 (基于 token 预算)"""
         memory = self.get_memory(task_id)
         return memory.get_recent_messages_by_tokens(token_budget)
 
-    def get_all_messages(self, task_id: str) -> list[dict]:
-        """
-        获取指定任务的所有消息 (包括摘要)
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            消息列表
-        """
-        memory = self.get_memory(task_id)
-        return memory.get_all_messages()
+    # ── L2 接口 ─────────────────────────────────────────────
 
     def needs_compression(self, task_id: str) -> bool:
-        """
-        检查指定任务是否需要压缩
+        """L2: 检查是否需要压缩"""
+        return self.get_memory(task_id).needs_compression()
 
-        Args:
-            task_id: 任务 ID
+    def compress(self, task_id: str, summary: str) -> None:
+        """L2: 应用压缩"""
+        self.get_memory(task_id).apply_compression(summary)
 
-        Returns:
-            True 如果需要压缩
-        """
-        memory = self.get_memory(task_id)
-        return memory.needs_compression()
+    # ── L3 接口 ─────────────────────────────────────────────
+
+    def mark_milestone(
+        self, task_id: str, label: str, summary: str = ""
+    ) -> Milestone:
+        """L3: 标记里程碑"""
+        return self.get_memory(task_id).mark_milestone(label, summary)
+
+    # ── 通用接口 ────────────────────────────────────────────
 
     def clear_memory(self, task_id: str) -> None:
-        """
-        清空指定任务的记忆
-
-        Args:
-            task_id: 任务 ID
-        """
+        """清空指定任务的记忆"""
         with self._lock:
             if task_id in self._memories:
                 self._memories[task_id].clear()
-                logger.info(f"[记忆] 清空记忆: task_id={task_id}")
 
     def get_stats(self, task_id: str) -> dict:
-        """
-        获取指定任务的记忆统计
-
-        Args:
-            task_id: 任务 ID
-
-        Returns:
-            {"rounds": int, "messages": int, "has_summary": bool}
-        """
+        """获取记忆统计"""
         memory = self.get_memory(task_id)
         return {
             "rounds": memory.get_round_count(),
@@ -379,20 +478,21 @@ class MemoryManager:
             "tokens": memory.get_token_count(),
             "has_summary": bool(memory.summary),
             "summary_length": len(memory.summary) if memory.summary else 0,
+            "milestones": len(memory.milestones),
+            "high_watermark": memory.high_watermark,
+            "low_watermark": memory.low_watermark,
         }
 
     def list_tasks(self) -> list[str]:
-        """
-        列出所有有记忆的任务 ID
-
-        Returns:
-            任务 ID 列表
-        """
+        """列出所有有记忆的任务 ID"""
         with self._lock:
             return list(self._memories.keys())
 
 
+# ═══════════════════════════════════════════════════════════════
 # 全局单例
+# ═══════════════════════════════════════════════════════════════
+
 _memory_manager: MemoryManager | None = None
 
 
@@ -400,8 +500,5 @@ def get_memory_manager() -> MemoryManager:
     """获取全局 MemoryManager 实例"""
     global _memory_manager
     if _memory_manager is None:
-        _memory_manager = MemoryManager(
-            compress_threshold_tokens=50_000,
-            keep_token_budget=20_000,
-        )
+        _memory_manager = MemoryManager()
     return _memory_manager

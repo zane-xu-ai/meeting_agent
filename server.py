@@ -487,14 +487,23 @@ async def chat_with_task(task_id: str, req: ChatRequest):
         llm = LLMClient()
         reply = await llm.chat_messages(messages, temperature=0.5, max_tokens=2048)
 
-        # M4: 保存对话到 MemoryManager
+        # M4: 保存对话到 MemoryManager (自动触发 L1 蒸馏)
         mem_mgr.add_message(task_id, "user", user_message)
         mem_mgr.add_message(task_id, "assistant", reply)
 
-        # 检查是否需要压缩 (超过阈值时触发)
+        # L2: 高低水位线检查 (超过 high_watermark 时自动压缩)
         if mem_mgr.needs_compression(task_id):
-            logger.info(f"[任务 {task_id}] 对话历史超过阈值，建议压缩")
-            # TODO: 实现自动压缩 (调用 LLM 生成摘要)
+            # 生成简单摘要 (后续可升级为 LLM 摘要)
+            memory = mem_mgr.get_memory(task_id)
+            early_msgs = memory.get_messages_to_compress()
+            if early_msgs:
+                summary_parts = []
+                for m in early_msgs[:6]:
+                    text = m["content"][:100]
+                    summary_parts.append(f"{m['role']}: {text}")
+                auto_summary = "早期对话摘要: " + "; ".join(summary_parts)
+                mem_mgr.compress(task_id, auto_summary)
+                logger.info(f"[任务 {task_id}] L2 压缩已执行")
 
         stats = mem_mgr.get_stats(task_id)
         logger.info(
@@ -513,7 +522,7 @@ async def chat_with_task(task_id: str, req: ChatRequest):
 
 @app.get("/api/chat/{task_id}/history")
 async def get_chat_history(task_id: str):
-    """获取任务的对话历史 (M4: 使用 MemoryManager)"""
+    """获取任务的对话历史 (M4: 三层分级压缩)"""
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
     mem_mgr = get_memory_manager()
@@ -521,6 +530,36 @@ async def get_chat_history(task_id: str):
     return {
         "messages": memory.messages,
         "summary": memory.summary,
+        "stats": mem_mgr.get_stats(task_id),
+        "milestones": [
+            {"label": m.label, "token_count": m.token_count}
+            for m in memory.milestones
+        ],
+    }
+
+
+class MilestoneRequest(BaseModel):
+    label: str
+    summary: str = ""
+
+
+@app.post("/api/chat/{task_id}/milestone")
+async def mark_milestone(task_id: str, req: MilestoneRequest):
+    """
+    L3: 标记里程碑，归档当前对话
+
+    当一个子任务完成时调用 (如 "分析完成", "待办提取完成")
+    将当前对话压缩为摘要，只保留最近的少量消息。
+    """
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+    mem_mgr = get_memory_manager()
+    milestone = mem_mgr.mark_milestone(task_id, req.label, req.summary)
+    return {
+        "milestone": {
+            "label": milestone.label,
+            "token_count": milestone.token_count,
+        },
         "stats": mem_mgr.get_stats(task_id),
     }
 
