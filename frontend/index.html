@@ -576,6 +576,175 @@
       transition: width 0.5s ease;
     }
 
+    /* ── Details Panel ──────────────────────── */
+    .details-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 24px;
+      overflow: hidden;
+    }
+
+    .details-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      cursor: pointer;
+      user-select: none;
+      transition: background 0.2s;
+    }
+
+    .details-header:hover {
+      background: var(--bg-hover);
+    }
+
+    .details-header-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .details-header-title svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .details-chevron {
+      width: 16px;
+      height: 16px;
+      color: var(--text-muted);
+      transition: transform 0.3s ease;
+    }
+
+    .details-chevron.open {
+      transform: rotate(180deg);
+    }
+
+    .details-body {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.4s ease, padding 0.3s ease;
+    }
+
+    .details-body.open {
+      max-height: 2000px;
+      padding: 0 24px 20px;
+    }
+
+    .detail-section {
+      margin-bottom: 16px;
+    }
+
+    .detail-section:last-child {
+      margin-bottom: 0;
+    }
+
+    .detail-section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px 20px;
+    }
+
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 3px 0;
+    }
+
+    .detail-label {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .detail-value {
+      font-size: 13px;
+      color: var(--text-primary);
+      font-weight: 500;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+    }
+
+    .detail-value.highlight {
+      color: var(--accent);
+    }
+
+    .detail-value.success {
+      color: var(--success);
+    }
+
+    .detail-value.warning {
+      color: var(--warning);
+    }
+
+    .stage-timeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    .stage-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 5px 0;
+      position: relative;
+    }
+
+    .stage-item::before {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 22px;
+      width: 2px;
+      height: calc(100% - 10px);
+      background: var(--border);
+    }
+
+    .stage-item:last-child::before {
+      display: none;
+    }
+
+    .stage-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--accent);
+      position: relative;
+      z-index: 1;
+    }
+
+    .stage-dot.skipped {
+      background: var(--border);
+    }
+
+    .stage-name {
+      font-size: 13px;
+      color: var(--text-secondary);
+      flex: 1;
+    }
+
+    .stage-duration {
+      font-size: 12px;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      color: var(--text-muted);
+    }
+
     /* ── Result ─────────────────────────────── */
     .result-card {
       background: var(--bg-card);
@@ -950,7 +1119,7 @@
             <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
             <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
           </div>
-          <span style="font-size:11px;color:var(--text-muted);">v2.1.1</span>
+          <span style="font-size:11px;color:var(--text-muted);">v2.1.2</span>
         </div>
         <button class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -1204,6 +1373,123 @@
       </div>
     </transition>
 
+    <!-- Details Panel (collapsed after completion) -->
+    <transition name="fade">
+      <div v-if="phase === 'done'" class="details-panel">
+        <div class="details-header" @click="detailsOpen = !detailsOpen">
+          <div class="details-header-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+            处理详情
+          </div>
+          <svg class="details-chevron" :class="{ open: detailsOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9" />
+          </svg>
+        </div>
+        <div class="details-body" :class="{ open: detailsOpen }">
+          <!-- Source Info -->
+          <div class="detail-section" v-if="meta.source_type || meta.video_title">
+            <div class="detail-section-title">来源信息</div>
+            <div class="detail-grid">
+              <div class="detail-row" v-if="meta.source_type">
+                <span class="detail-label">来源类型</span>
+                <span class="detail-value">{{ sourceTypeLabel(meta.source_type) }}</span>
+              </div>
+              <div class="detail-row" v-if="meta.video_title">
+                <span class="detail-label">视频标题</span>
+                <span class="detail-value" style="font-family:inherit;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="meta.video_title">{{ meta.video_title }}</span>
+              </div>
+              <div class="detail-row" v-if="task.filename">
+                <span class="detail-label">文件名</span>
+                <span class="detail-value" style="font-family:inherit">{{ task.filename }}</span>
+              </div>
+              <div class="detail-row" v-if="meta.file_size">
+                <span class="detail-label">文件大小</span>
+                <span class="detail-value">{{ formatFileSize(meta.file_size) }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Models -->
+          <div class="detail-section" v-if="meta.asr_model_used || meta.llm_model_used">
+            <div class="detail-section-title">模型选择</div>
+            <div class="detail-grid">
+              <div class="detail-row" v-if="meta.asr_model_used">
+                <span class="detail-label">ASR 模型</span>
+                <span class="detail-value highlight">{{ meta.asr_model_used }}</span>
+              </div>
+              <div class="detail-row" v-if="meta.llm_model_used">
+                <span class="detail-label">LLM 模型</span>
+                <span class="detail-value highlight">{{ meta.llm_model_used }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ASR Details -->
+          <div class="detail-section" v-if="meta.asr_sentences">
+            <div class="detail-section-title">ASR 转写</div>
+            <div class="detail-grid">
+              <div class="detail-row">
+                <span class="detail-label">句数</span>
+                <span class="detail-value">{{ meta.asr_sentences }} 句</span>
+              </div>
+              <div class="detail-row" v-if="meta.asr_chars">
+                <span class="detail-label">字符数</span>
+                <span class="detail-value">{{ meta.asr_chars }} 字</span>
+              </div>
+              <div class="detail-row" v-if="meta.cleaned_sentences">
+                <span class="detail-label">清洗后句数</span>
+                <span class="detail-value">{{ meta.cleaned_sentences }} 句</span>
+              </div>
+              <div class="detail-row" v-if="meta.asr_duration">
+                <span class="detail-label">ASR 耗时</span>
+                <span class="detail-value">{{ meta.asr_duration }}s</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Analysis -->
+          <div class="detail-section" v-if="meta.rec_type || meta.cache_hit !== undefined">
+            <div class="detail-section-title">分析结果</div>
+            <div class="detail-grid">
+              <div class="detail-row" v-if="meta.rec_type">
+                <span class="detail-label">录音类型</span>
+                <span class="detail-value">{{ recTypeLabel(meta.rec_type) }}</span>
+              </div>
+              <div class="detail-row" v-if="meta.cache_hit !== undefined">
+                <span class="detail-label">缓存命中</span>
+                <span class="detail-value" :class="meta.cache_hit ? 'success' : ''">{{ meta.cache_hit ? '是' : '否' }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Timing -->
+          <div class="detail-section" v-if="stageTimings.length">
+            <div class="detail-section-title">阶段耗时</div>
+            <div class="stage-timeline">
+              <div class="stage-item" v-for="(st, i) in stageTimings" :key="i">
+                <div class="stage-dot" :class="{ skipped: st.skipped }"></div>
+                <span class="stage-name">{{ st.label }}</span>
+                <span class="stage-duration">{{ st.duration }}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Total -->
+          <div class="detail-section" v-if="meta.total_duration">
+            <div class="detail-section-title">总耗时</div>
+            <div class="detail-row">
+              <span class="detail-label">从开始到完成</span>
+              <span class="detail-value highlight">{{ meta.total_duration }}s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </transition>
+
     <!-- New Task -->
     <div v-if="phase !== 'idle'" style="text-align:center;">
       <button class="new-task-btn" @click="resetAll">
@@ -1238,15 +1524,26 @@
         const selectedAsrModel = ref('');
         const selectedLlmModel = ref('');
 
+        const meta = reactive({
+          source_type: '', asr_model_used: '', llm_model_used: '',
+          asr_sentences: 0, asr_duration: 0, llm_duration: 0, total_duration: 0,
+          rec_type: '', cache_hit: false, file_size: 0, audio_duration: 0,
+          asr_chars: 0, cleaned_sentences: 0, video_title: '',
+        });
+        const detailsOpen = ref(false);
+
         const task = reactive({
           task_id: '', filename: '', file_type: '', progress: 0,
           step: '', error: null, video_title: null,
+          source_type: '', file_size: 0,
         });
 
         const steps = reactive([
-          { label: '上传文件', state: 'done', elapsed: 0 },
-          { label: '预处理', state: 'pending', elapsed: 0 },
-          { label: '语音转写', state: 'pending', elapsed: 0 },
+          { label: '提取音频', state: 'done', elapsed: 0 },
+          { label: '音频预处理', state: 'pending', elapsed: 0 },
+          { label: 'ASR 语音转写', state: 'pending', elapsed: 0 },
+          { label: '文本清洗', state: 'pending', elapsed: 0 },
+          { label: '录音分类', state: 'pending', elapsed: 0 },
           { label: '智能分析', state: 'pending', elapsed: 0 },
           { label: '生成报告', state: 'pending', elapsed: 0 },
         ]);
@@ -1263,6 +1560,41 @@
           if (!resultMd.value) return '';
           return marked.parse(resultMd.value, { breaks: true });
         });
+
+        const stageTimings = computed(() => {
+          const p = task.progress;
+          const stages = [
+            { label: '音频提取', progress: 10, duration: '' },
+            { label: '音频预处理', progress: 25, duration: '' },
+            { label: 'ASR 语音转写', progress: 40, duration: meta.asr_duration ? meta.asr_duration + 's' : '' },
+            { label: '文本清洗', progress: 58, duration: '' },
+            { label: '录音分类', progress: 62, duration: '' },
+            { label: '智能分析', progress: 70, duration: meta.llm_duration ? meta.llm_duration + 's' : '' },
+            { label: '生成报告', progress: 100, duration: '' },
+          ];
+          return stages.map(s => ({
+            label: s.label,
+            duration: p >= s.progress ? (s.duration || '< 1s') : '',
+            skipped: false,
+          }));
+        });
+
+        function formatFileSize(bytes) {
+          if (!bytes) return '';
+          if (bytes < 1024) return bytes + ' B';
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+          return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function sourceTypeLabel(t) {
+          const m = { local_audio: '本地音频', local_video: '本地视频', url_audio: 'URL 音频', url_video: 'URL 视频' };
+          return m[t] || t;
+        }
+
+        function recTypeLabel(t) {
+          const m = { meeting: '会议', interview: '面试', general: '通用', video: '视频' };
+          return m[t] || t;
+        }
 
         // ── Timer ──
         function startStepTimer() {
@@ -1374,17 +1706,20 @@
               task.progress = d.progress || 0;
               task.step = d.step || '';
               task.video_title = d.video_title || null;
+              updateMeta(d);
 
-              // Update step states based on progress
-              // Backend progress values: 10=upload, 15/25=preprocess, 35=ASR, 50=classify, 60/65=analyze
-              if (d.progress >= 10) setStepState(0, 'done');
-              if (d.progress >= 15) setStepState(1, 'active');
-              if (d.progress >= 25) { setStepState(1, 'done'); setStepState(2, 'active'); }
-              if (d.progress >= 50) { setStepState(2, 'done'); setStepState(3, 'active'); }
-              if (d.progress >= 65) { setStepState(3, 'done'); setStepState(4, 'active'); }
+              // Update 7 step states based on backend progress
+              const p = d.progress;
+              if (p >= 10) setStepState(0, 'done');
+              if (p >= 10) setStepState(1, 'active');
+              if (p >= 25) { setStepState(1, 'done'); setStepState(2, 'active'); }
+              if (p >= 40) { setStepState(2, 'done'); setStepState(3, 'active'); }
+              if (p >= 58) { setStepState(3, 'done'); setStepState(4, 'active'); }
+              if (p >= 66) { setStepState(4, 'done'); setStepState(5, 'active'); }
+              if (p >= 90) { setStepState(5, 'done'); setStepState(6, 'active'); }
 
               if (d.status === 'completed') {
-                setStepState(4, 'done');
+                setStepState(6, 'done');
                 clearInterval(pollTimer);
                 await fetchResult();
               } else if (d.status === 'failed') {
@@ -1392,9 +1727,20 @@
                 task.error = d.error;
                 setStepState(getActiveStep(), 'error');
                 clearInterval(pollTimer);
+                stopStepTimer();
               }
             } catch { /* retry next tick */ }
           }, 2000);
+        }
+
+        function updateMeta(d) {
+          const fields = ['source_type','asr_model_used','llm_model_used','asr_sentences',
+            'asr_duration','llm_duration','total_duration','rec_type','cache_hit',
+            'file_size','audio_duration','asr_chars','cleaned_sentences'];
+          for (const f of fields) {
+            if (d[f] !== undefined) meta[f] = d[f];
+          }
+          if (d.video_title) { meta.video_title = d.video_title; task.video_title = d.video_title; }
         }
 
         function getActiveStep() {
@@ -1409,6 +1755,12 @@
             const r = await fetch(`${API}/api/result/${task.task_id}`);
             const d = await r.json();
             resultMd.value = d.content || '';
+            // Fetch final status for complete metadata
+            try {
+              const sr = await fetch(`${API}/api/status/${task.task_id}`);
+              const sd = await sr.json();
+              updateMeta(sd);
+            } catch {}
             phase.value = 'done';
             stopStepTimer();
           } catch (e) {
@@ -1474,7 +1826,14 @@
           asrText.value = '';
           activeResultTab.value = 'analysis';
           inputUrl.value = '';
-          Object.assign(task, { task_id: '', filename: '', file_type: '', progress: 0, step: '', error: null, video_title: null });
+          detailsOpen.value = false;
+          Object.assign(task, { task_id: '', filename: '', file_type: '', progress: 0, step: '', error: null, video_title: null, source_type: '', file_size: 0 });
+          Object.assign(meta, {
+            source_type: '', asr_model_used: '', llm_model_used: '',
+            asr_sentences: 0, asr_duration: 0, llm_duration: 0, total_duration: 0,
+            rec_type: '', cache_hit: false, file_size: 0, audio_duration: 0,
+            asr_chars: 0, cleaned_sentences: 0, video_title: '',
+          });
           resetSteps();
         }
 
@@ -1513,8 +1872,10 @@
           phase, isDragging, apiOk, copied, task, steps, acceptExts,
           renderedMd, resultMd, inputMode, inputUrl, activeResultTab, asrText, isDark,
           asrModels, llmModels, selectedAsrModel, selectedLlmModel,
+          meta, detailsOpen, stageTimings,
           onDrop, onFileSelect, submitUrl, downloadResult, copyResult, resetAll,
-          formatTime, switchToAsr, downloadAsr, toggleTheme,
+          formatTime, formatFileSize, sourceTypeLabel, recTypeLabel,
+          switchToAsr, downloadAsr, toggleTheme,
         };
       }
     }).mount('#app');

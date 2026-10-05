@@ -77,6 +77,20 @@ class TaskStatus(BaseModel):
     filename: str = ""
     file_type: str = ""  # audio / video
     video_title: str | None = None
+    # ─ 详细元数据 ──
+    source_type: str = ""             # local_audio | local_video | url_audio | url_video
+    asr_model_used: str = ""          # 实际使用的 ASR 模型
+    llm_model_used: str = ""          # 实际使用的 LLM 模型
+    asr_sentences: int = 0            # ASR 转写句数
+    asr_duration: float = 0.0         # ASR 耗时 (秒)
+    llm_duration: float = 0.0         # LLM 耗时 (秒)
+    total_duration: float = 0.0       # 总耗时 (秒)
+    rec_type: str = ""                # meeting | interview | general
+    cache_hit: bool = False           # Summary 缓存是否命中
+    file_size: int = 0                # 文件大小 (字节)
+    audio_duration: float = 0.0       # 音视频时长 (秒)
+    asr_chars: int = 0                # ASR 转写字符数
+    cleaned_sentences: int = 0        # 清洗后句数
 
 
 class UploadResponse(BaseModel):
@@ -174,6 +188,7 @@ def _process(task_id: str, source: str, source_type: str,
             "result_path": None,
             "video_title": None,
             "llm_start": 0.0,
+            "pipeline_start": time.time(),
             "error": None,
         }
 
@@ -241,6 +256,8 @@ async def upload_file(
             "filename": file.filename or "",
             "file_type": file_type,
             "video_title": None,
+            "source_type": source_type,
+            "file_size": len(content),
         }
 
     threading.Thread(
@@ -292,6 +309,8 @@ async def submit_url(req: UrlRequest):
             "filename": display_name,
             "file_type": file_type,
             "video_title": None,
+            "source_type": source_type,
+            "file_size": 0,
         }
 
     threading.Thread(

@@ -57,6 +57,7 @@ class AgentState(TypedDict):
     audio_stem: str                      # 音频文件名 (不含后缀)
     video_title: str | None              # 视频标题 (URL 视频)
     llm_start: float                     # LLM 分析开始时间戳
+    pipeline_start: float                 # 流水线开始时间戳
     error: str | None                    # 错误信息
 
 
@@ -117,7 +118,8 @@ async def extract_audio(state: AgentState) -> dict:
     if source_type in ("local_video", "url_video"):
         from agent.video_client import extract_audio_from_video
 
-        _notify(task_id, step="正在提取音频...", progress=10)
+        _notify(task_id, step="正在提取音频...", progress=10,
+                source_type=source_type)
         logger.info(f"[任务 {task_id}] 从视频提取音频...")
 
         filename_stem = state["audio_stem"]
@@ -150,6 +152,8 @@ async def extract_audio(state: AgentState) -> dict:
         return updates
 
     # 音频源: 无需提取
+    _notify(task_id, step="音频源，跳过提取", progress=5,
+            source_type=source_type)
     return {}
 
 
@@ -160,7 +164,7 @@ async def preprocess(state: AgentState) -> dict:
 
     # URL 音频直接传给 ASR，跳过预处理
     if source_type == "url_audio":
-        _notify(task_id, step="正在语音转写...", progress=38)
+        _notify(task_id, step="URL 音频，跳过预处理", progress=38)
         return {"asr_input": state["source"]}
 
     # 本地音频 or 从视频提取的音频 → 预处理
@@ -182,7 +186,7 @@ async def preprocess(state: AgentState) -> dict:
         except Exception:
             pass
 
-    _notify(task_id, step="正在语音转写...", progress=38)
+    _notify(task_id, step="预处理完成，准备转写...", progress=38)
     return {
         "preprocessed_path": str(preprocessed),
         "asr_input": str(preprocessed),
@@ -195,20 +199,24 @@ async def asr_transcribe(state: AgentState) -> dict:
     asr_input = state["asr_input"]
 
     logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
-    _notify(task_id, step="正在语音转写...", progress=40)
 
     from agent.asr_client import ASRClient
 
     asr = ASRClient(models=[state["asr_model"]]
                     if state.get("asr_model") else None)
+    asr_model = asr.model
+    _notify(task_id, step="正在语音转写...", progress=40,
+            asr_model_used=asr_model)
+
     t0 = time.time()
     transcript = await asr.transcribe(asr_input)
     asr_duration = time.time() - t0
 
     transcript_text = transcript.formatted_text
+    sentence_count = len(transcript.sentences)
     logger.info(
         f"[任务 {task_id}] ASR 转写完成, "
-        f"共 {len(transcript.sentences)} 句, 耗时 {asr_duration:.1f}s"
+        f"共 {sentence_count} 句, 耗时 {asr_duration:.1f}s"
     )
 
     # 清理预处理临时文件
@@ -217,6 +225,11 @@ async def asr_transcribe(state: AgentState) -> dict:
             Path(state["preprocessed_path"]).unlink()
         except Exception:
             pass
+
+    _notify(task_id, step=f"转写完成 ({sentence_count} 句)",
+            progress=50, asr_sentences=sentence_count,
+            asr_duration=round(asr_duration, 1),
+            asr_chars=len(transcript_text))
 
     return {
         "transcript": transcript,
@@ -245,9 +258,11 @@ async def text_clean(state: AgentState) -> dict:
 
     # 保存 ASR 缓存
     asr_path = save_asr_cache(cleaned_text, state["audio_stem"])
+    cleaned_count = len(cleaned.sentences)
     _notify(task_id, asr_result_path=str(asr_path),
-            step="转写完成，正在整理...", progress=58)
-    logger.info(f"[任务 {task_id}] 文本预处理完成：{len(cleaned.sentences)} 句")
+            step=f"文本清洗完成 ({cleaned_count} 句)", progress=58,
+            cleaned_sentences=cleaned_count)
+    logger.info(f"[任务 {task_id}] 文本预处理完成：{cleaned_count} 句")
 
     return {"transcript_text": cleaned_text}
 
@@ -260,6 +275,8 @@ async def classify(state: AgentState) -> dict:
     # 视频源不走分类，直接归为 general
     if source_type in ("local_video", "url_video"):
         logger.info(f"[任务 {task_id}] 视频源，跳过分类 (general)")
+        _notify(task_id, step="视频源，跳过分类", progress=62,
+                rec_type="general")
         return {"rec_type": "general"}
 
     _notify(task_id, step="正在识别录音类型...", progress=62)
@@ -269,6 +286,8 @@ async def classify(state: AgentState) -> dict:
 
     rec_type = await classify_recording(state["transcript_text"])
     logger.info(f"[任务 {task_id}] 分类结果: {rec_type}")
+    _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
+            rec_type=rec_type)
 
     return {"rec_type": rec_type}
 
@@ -290,6 +309,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
         task_id,
         step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...",
         progress=70,
+        llm_model_used=llm_model or "自动",
     )
 
     llm_start = time.time()
@@ -311,6 +331,9 @@ async def analyze_dispatch(state: AgentState) -> dict:
         output_text = format_markdown(
             result, event_time=None, timing_info=timing_info)
         save_summary_cache(output_text, audio_stem, rec_type="meeting")
+        llm_dur = time.time() - llm_start
+        _notify(task_id, step="会议分析完成", progress=90,
+                llm_duration=round(llm_dur, 1))
 
         return {
             "output_text": output_text,
@@ -342,6 +365,9 @@ async def analyze_dispatch(state: AgentState) -> dict:
         result_dir.mkdir(parents=True, exist_ok=True)
         (result_dir / "question.md").write_text(q_md, encoding="utf-8")
         (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
+        llm_dur = time.time() - llm_start
+        _notify(task_id, step="面试分析完成", progress=90,
+                llm_duration=round(llm_dur, 1))
 
         return {
             "output_text": a_md,
@@ -357,10 +383,15 @@ async def analyze_dispatch(state: AgentState) -> dict:
     if cached is not None:
         output_text = cached
         logger.info(f"[任务 {task_id}] 使用 Summary 缓存")
+        _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
+                cache_hit=True, llm_duration=0)
     else:
         data = await analyze_general(transcript_text, llm_model=llm_model)
         output_text = format_general_result(data, None, timing_info)
         save_summary_cache(output_text, audio_stem, rec_type=rec_type)
+        llm_dur = time.time() - llm_start
+        _notify(task_id, step="通用分析完成", progress=90,
+                cache_hit=False, llm_duration=round(llm_dur, 1))
 
     return {
         "output_text": output_text,
@@ -373,25 +404,31 @@ async def format_output(state: AgentState) -> dict:
     task_id = state["task_id"]
 
     # interview 分支已在 analyze_dispatch 中直接写入文件并设置 result_path
-    if state.get("result_path"):
-        logger.info(f"[任务 {task_id}] 流水线执行完成")
-        return {}
+    if not state.get("result_path"):
+        # meeting / general / video 分支: 通过 result_handler 保存结果
+        result_handler = _result_handler_registry.get(task_id)
+        if result_handler and state.get("output_text"):
+            source_type = state["source_type"]
+            rec_type = state["rec_type"]
 
-    # meeting / general / video 分支: 通过 result_handler 保存结果
-    result_handler = _result_handler_registry.get(task_id)
-    if result_handler and state.get("output_text"):
-        source_type = state["source_type"]
-        rec_type = state["rec_type"]
+            if rec_type == "meeting":
+                subdir = "meeting"
+            elif source_type in ("local_video", "url_video"):
+                subdir = "video"
+            else:
+                subdir = "other"
 
-        if rec_type == "meeting":
-            subdir = "meeting"
-        elif source_type in ("local_video", "url_video"):
-            subdir = "video"
-        else:
-            subdir = "other"
+            result_handler(task_id, state["audio_stem"],
+                           subdir, state["output_text"])
 
-        result_handler(task_id, state["audio_stem"],
-                       subdir, state["output_text"])
+    # 计算总耗时并发送完成通知 (所有分支统一处理)
+    pipeline_start = state.get("pipeline_start", 0)
+    if pipeline_start:
+        total_dur = time.time() - pipeline_start
+        _notify(task_id, step="分析完成", progress=100,
+                total_duration=round(total_dur, 1))
+    else:
+        _notify(task_id, step="分析完成", progress=100)
 
     logger.info(f"[任务 {task_id}] 流水线执行完成")
     return {}
