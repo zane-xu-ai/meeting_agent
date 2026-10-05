@@ -1286,12 +1286,27 @@
       animation: chatDot 1.4s infinite ease-in-out both;
     }
 
-    .chat-loading-dot:nth-child(1) { animation-delay: -0.32s; }
-    .chat-loading-dot:nth-child(2) { animation-delay: -0.16s; }
+    .chat-loading-dot:nth-child(1) {
+      animation-delay: -0.32s;
+    }
+
+    .chat-loading-dot:nth-child(2) {
+      animation-delay: -0.16s;
+    }
 
     @keyframes chatDot {
-      0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
-      40% { transform: scale(1); opacity: 1; }
+
+      0%,
+      80%,
+      100% {
+        transform: scale(0);
+        opacity: 0.5;
+      }
+
+      40% {
+        transform: scale(1);
+        opacity: 1;
+      }
     }
 
     /* ── Fade transition ────────────────────── */
@@ -1749,8 +1764,12 @@
             <div class="chat-msg" :class="msg.role">
               <div class="chat-avatar">{{ msg.role === 'user' ? '你' : 'AI' }}</div>
               <div class="chat-bubble">
-                <div v-if="msg.role === 'assistant'" class="md-content" v-html="renderMd(msg.content)"></div>
-                <div v-else>{{ msg.content }}</div>
+                <template v-if="msg.role === 'assistant'">
+                  <div class="md-content" v-html="renderMd(msg.content)"></div>
+                </template>
+                <template v-else>
+                  <div>{{ msg.content }}</div>
+                </template>
               </div>
             </div>
           </template>
@@ -1766,8 +1785,8 @@
           </div>
         </div>
         <div class="chat-input-area">
-          <textarea class="chat-input" v-model="chatInput" placeholder="输入你的问题... (Enter 发送，Shift+Enter 换行)"
-            rows="1" @keydown.enter.exact.prevent="sendChat" @keydown.shift.enter="/* allow newline */"
+          <textarea class="chat-input" v-model="chatInput" placeholder="输入你的问题... (Enter 发送，Shift+Enter 换行)" rows="1"
+            @keydown.enter.exact.prevent="sendChat"
             ref="chatInputEl"></textarea>
           <button class="chat-send-btn" @click="sendChat" :disabled="chatLoading || !chatInput.trim()">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"

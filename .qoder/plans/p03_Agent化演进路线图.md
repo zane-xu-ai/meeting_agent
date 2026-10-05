@@ -3,7 +3,9 @@
 > LangGraph 流水线重构 (p01) 和流水线问题修复 (p02) 已完成。
 > **M1 Function Calling 已完成** ✅ (2026-10-05)
 > **M2 多轮对话已完成** ✅ (2026-10-05)
-> 本计划定义从“智能管道”进化为“真正 AI Agent”的后续路线。
+> **M3 上下文工程已完成** ✅ (2026-10-05)
+> **Phase 1: Agent 核心能力 全部完成** 🎉
+> 本计划定义从"智能管道"进化为"真正 AI Agent"的后续路线。
 
 ## 当前架构总结
 
@@ -171,9 +173,20 @@ class AgentState(TypedDict):
 4. **上下文窗口适配**: 根据模型实际上下文大小动态调整
 
 **改动文件**:
-- `agent/context.py` — **新建**，上下文管理器（token 计算、压缩、组装）
-- `agent/llm_client.py` — 集成 context manager
-- `requirements.txt` — 添加 `tiktoken`
+- `agent/context.py` — **新建**，上下文管理器（token 计算、压缩、组装）✅
+- `agent/llm_client.py` — 集成 context manager ✅
+- `requirements.txt` — 添加 `tiktoken` ✅
+
+**实现内容** (2026-10-05):
+- `ContextManager` 类: tiktoken 精确 token 计算 (cl100k_base 编码器)
+- `count_tokens()`: 精确计算文本 token 数，降级方案按字符估算
+- `truncate_to_tokens()`: 按 token 预算截断文本
+- `build_chat_context()`: 动态组装 system prompt + transcript + analysis + history
+- `count_messages_tokens()`: 计算 messages 列表总 token 数
+- `needs_summarization()`: 检测长文本是否需要摘要
+- `estimate_text_stats()`: 文本统计信息
+- server.py: chat 接口改用 ContextManager 替代字符截断
+- agent/graph.py: agent_loop 长文本检测改用 token 计算 (阈值 80k tokens)
 
 ---
 

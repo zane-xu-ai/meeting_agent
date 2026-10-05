@@ -25,6 +25,7 @@ from typing import Any, Callable, Literal, TypedDict
 from loguru import logger
 
 from config import settings
+from agent.context import get_context_manager
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -516,8 +517,23 @@ async def agent_loop(state: AgentState) -> dict:
     from agent.tools import TOOL_SCHEMAS, TOOL_REGISTRY, ToolContext
     from agent.llm_client import LLMClient
 
+    # ── M3: Token 级别的上下文管理 ──
+    ctx_mgr = get_context_manager()
+    transcript_tokens = ctx_mgr.count_tokens(transcript_text)
     logger.info(f"[任务 {task_id}] Agent Loop 启动: "
-                f"{len(transcript_text)} 字符, {len(TOOL_SCHEMAS)} 个工具")
+                f"{len(transcript_text)} 字符, {transcript_tokens} tokens, "
+                f"{len(TOOL_SCHEMAS)} 个工具")
+
+    # 长文本截断 (为工具调用预留足够上下文空间)
+    max_transcript_tokens = 80_000  # 为 system prompt + tool calls 预留空间
+    if transcript_tokens > max_transcript_tokens:
+        logger.warning(
+            f"[任务 {task_id}] 转写文本过长: {transcript_tokens} tokens, "
+            f"截断到 {max_transcript_tokens} tokens"
+        )
+        transcript_text = ctx_mgr.truncate_to_tokens(
+            transcript_text, max_transcript_tokens
+        )
 
     llm = LLMClient(models=[llm_model] if llm_model else None)
 
@@ -543,7 +559,8 @@ async def agent_loop(state: AgentState) -> dict:
 
     try:
         for iteration in range(max_iterations):
-            logger.debug(f"[任务 {task_id}] Agent 迭代 {iteration + 1}/{max_iterations}")
+            logger.debug(
+                f"[任务 {task_id}] Agent 迭代 {iteration + 1}/{max_iterations}")
 
             response = await llm.chat_with_tools(
                 messages=messages,
@@ -577,7 +594,8 @@ async def agent_loop(state: AgentState) -> dict:
                 fn_args = json.loads(tc["function"]["arguments"])
                 tc_id = tc["id"]
 
-                logger.info(f"[任务 {task_id}] Tool Call: {fn_name}({list(fn_args.keys())})")
+                logger.info(
+                    f"[任务 {task_id}] Tool Call: {fn_name}({list(fn_args.keys())})")
                 _notify(task_id, step=f"Agent 调用: {fn_name}",
                         progress=65, step_idx=4)
 

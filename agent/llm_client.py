@@ -160,7 +160,8 @@ class LLMClient:
         }
 
         async with httpx.AsyncClient(timeout=120.0) as client:
-            logger.debug(f"调用 LLM (messages): {self.model}, turns={len(messages)}")
+            logger.debug(
+                f"调用 LLM (messages): {self.model}, turns={len(messages)}")
             resp = await client.post(self.chat_url, json=payload, headers=headers)
             resp.raise_for_status()
             result = resp.json()

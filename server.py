@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config import settings
+from agent.context import get_context_manager
 
 # ── 日志配置 ──────────────────────────────────────────────────
 logger.remove()
@@ -460,29 +461,25 @@ async def chat_with_task(task_id: str, req: ChatRequest):
     if result_path and Path(result_path).exists():
         analysis_text = Path(result_path).read_text(encoding="utf-8")
 
-    # 构建对话历史上下文 (截断避免超出 token 限制)
-    max_transcript_len = 6000  # 转写文本截断
-    max_analysis_len = 4000    # 分析报告截断
-    ctx_transcript = transcript_text[:max_transcript_len]
-    ctx_analysis = analysis_text[:max_analysis_len]
+    # 使用 ContextManager 进行 token 级别的上下文管理
+    ctx_mgr = get_context_manager()
 
-    # 构建 messages: system + 上下文 + 对话历史 + 当前问题
-    system_content = CHAT_SYSTEM_PROMPT
-    if ctx_transcript:
-        system_content += f"\n\n## 转写文本\n\n{ctx_transcript}"
-    if ctx_analysis:
-        system_content += f"\n\n## 分析报告\n\n{ctx_analysis}"
-
-    messages: list[dict] = [{"role": "system", "content": system_content}]
-
-    # 追加历史对话 (最近 10 轮)
+    # 获取对话历史
     with chat_lock:
         history = chat_histories.get(task_id, [])
         recent_history = history[-20:]  # 最近 10 轮 (每轮 user+assistant)
-        messages.extend(recent_history)
 
-    # 追加当前用户消息
-    messages.append({"role": "user", "content": user_message})
+    # 追加当前用户消息到历史 (用于 token 计算)
+    current_messages = recent_history + [{"role": "user", "content": user_message}]
+
+    # 构建完整上下文 (token 预算自动分配)
+    messages = ctx_mgr.build_chat_context(
+        base_system_prompt=CHAT_SYSTEM_PROMPT,
+        transcript=transcript_text,
+        analysis=analysis_text,
+        history=current_messages,
+        response_reserve=4000,
+    )
 
     # 调用 LLM
     try:
@@ -494,8 +491,10 @@ async def chat_with_task(task_id: str, req: ChatRequest):
         with chat_lock:
             if task_id not in chat_histories:
                 chat_histories[task_id] = []
-            chat_histories[task_id].append({"role": "user", "content": user_message})
-            chat_histories[task_id].append({"role": "assistant", "content": reply})
+            chat_histories[task_id].append(
+                {"role": "user", "content": user_message})
+            chat_histories[task_id].append(
+                {"role": "assistant", "content": reply})
 
         logger.info(f"[任务 {task_id}] 追问对话: user='{user_message[:50]}...' → "
                     f"reply={len(reply)} chars")
