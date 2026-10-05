@@ -6,7 +6,7 @@ from loguru import logger
 from pydub import AudioSegment
 
 
-def preprocess_audio(input_path: str | Path, sample_rate: int = 16000) -> Path:
+def preprocess_audio(input_path: str | Path, sample_rate: int = 16000) -> tuple[Path, float]:
     """
     音频预处理: 转换为单声道、指定采样率的 WAV 文件。
 
@@ -15,7 +15,7 @@ def preprocess_audio(input_path: str | Path, sample_rate: int = 16000) -> Path:
         sample_rate: 目标采样率
 
     Returns:
-        预处理后的 WAV 文件路径
+        (预处理后的 WAV 文件路径, 音频时长秒数)
     """
     input_path = Path(input_path)
     if not input_path.exists():
@@ -34,7 +34,7 @@ def preprocess_audio(input_path: str | Path, sample_rate: int = 16000) -> Path:
     duration_sec = len(audio) / 1000
     logger.info(f"预处理完成: 时长 {duration_sec:.1f}s, 输出 {output_path.name}")
 
-    return output_path
+    return output_path, duration_sec
 
 
 def get_audio_duration_ms(audio_path: str | Path) -> int:

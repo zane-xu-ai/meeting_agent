@@ -99,7 +99,7 @@ class MeetingPipeline:
             # 本地文件模式: 预处理
             audio_path = Path(audio_source)
             logger.info("[1/4] 音频预处理...")
-            preprocessed = preprocess_audio(
+            preprocessed, _ = preprocess_audio(
                 audio_path, sample_rate=settings.asr_sample_rate)
             asr_input = preprocessed
 

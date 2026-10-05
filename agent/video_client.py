@@ -76,6 +76,7 @@ async def extract_audio_from_video(
     source: str,
     output_dir: Path | None = None,
     filename_stem: str | None = None,
+    progress_cb: callable | None = None,
 ) -> Path:
     """
     从视频提取音频，返回 WAV 文件路径。
@@ -84,12 +85,13 @@ async def extract_audio_from_video(
         source: 本地视频路径 或 视频 URL
         output_dir: 输出目录，默认使用临时目录
         filename_stem: 输出文件名 (不含后缀)，默认用视频标题
+        progress_cb: 下载/提取进度回调 (percent: float 0-100)
 
     Returns:
         提取的 WAV 音频文件路径 (调用方负责清理)
     """
     if source.startswith(("http://", "https://")):
-        return await _extract_from_url(source, output_dir, filename_stem)
+        return await _extract_from_url(source, output_dir, filename_stem, progress_cb)
     else:
         return _extract_from_local(Path(source), output_dir, filename_stem)
 
@@ -223,6 +225,7 @@ async def _extract_from_url(
     url: str,
     output_dir: Path | None = None,
     filename_stem: str | None = None,
+    progress_cb: callable | None = None,
 ) -> Path:
     """从网络视频 URL 下载并提取音频 (使用 yt-dlp Python 模块)"""
     import yt_dlp
@@ -241,6 +244,16 @@ async def _extract_from_url(
 
     logger.info(f"从网络视频提取音频: {url[:80]}...")
 
+    # 下载进度回调
+    def _progress_hook(d):
+        if progress_cb and d.get("status") == "downloading":
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            downloaded = d.get("downloaded_bytes", 0)
+            if total > 0:
+                progress_cb(round(downloaded / total * 100, 1))
+        elif progress_cb and d.get("status") == "finished":
+            progress_cb(100.0)
+
     # yt-dlp 基础配置
     base_opts = {
         "extractaudio": True,           # 只提取音频
@@ -251,6 +264,7 @@ async def _extract_from_url(
         "nocheckcertificate": True,
         "quiet": True,                  # 静默模式
         "no_warnings": True,
+        "progress_hooks": [_progress_hook],
     }
 
     # 构建配置 (Bilibili 自动添加浏览器 cookies)

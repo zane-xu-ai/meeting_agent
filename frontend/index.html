@@ -1414,6 +1414,10 @@
                 <span class="detail-label">文件大小</span>
                 <span class="detail-value">{{ formatFileSize(meta.file_size) }}</span>
               </div>
+              <div class="detail-row" v-if="meta.audio_duration">
+                <span class="detail-label">音视频时长</span>
+                <span class="detail-value">{{ formatDuration(meta.audio_duration) }}</span>
+              </div>
             </div>
           </div>
 
@@ -1534,6 +1538,7 @@
           asr_sentences: 0, asr_duration: 0, llm_duration: 0, total_duration: 0,
           rec_type: '', cache_hit: false, file_size: 0, audio_duration: 0,
           asr_chars: 0, cleaned_sentences: 0, video_title: '',
+          step_idx: -1, download_progress: 0,
         });
         const detailsOpen = ref(false);
 
@@ -1567,19 +1572,19 @@
         });
 
         const stageTimings = computed(() => {
-          const p = task.progress;
+          const si = meta.step_idx;
           const stages = [
-            { label: '音频提取', progress: 10, duration: '' },
-            { label: '音频预处理', progress: 25, duration: '' },
-            { label: 'ASR 语音转写', progress: 40, duration: meta.asr_duration ? meta.asr_duration + 's' : '' },
-            { label: '文本清洗', progress: 58, duration: '' },
-            { label: '录音分类', progress: 62, duration: '' },
-            { label: '智能分析', progress: 70, duration: meta.llm_duration ? meta.llm_duration + 's' : '' },
-            { label: '生成报告', progress: 100, duration: '' },
+            { label: '音频提取', idx: 0, duration: '' },
+            { label: '音频预处理', idx: 1, duration: '' },
+            { label: 'ASR 语音转写', idx: 2, duration: meta.asr_duration ? meta.asr_duration + 's' : '' },
+            { label: '文本清洗', idx: 3, duration: '' },
+            { label: '录音分类', idx: 4, duration: '' },
+            { label: '智能分析', idx: 5, duration: meta.llm_duration ? meta.llm_duration + 's' : '' },
+            { label: '生成报告', idx: 6, duration: '' },
           ];
           return stages.map(s => ({
             label: s.label,
-            duration: p >= s.progress ? (s.duration || '< 1s') : '',
+            duration: si > s.idx ? (s.duration || '< 1s') : (si === s.idx ? '进行中...' : ''),
             skipped: false,
           }));
         });
@@ -1589,6 +1594,14 @@
           if (bytes < 1024) return bytes + ' B';
           if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
           return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function formatDuration(sec) {
+          if (!sec) return '';
+          if (sec < 60) return sec.toFixed(1) + 's';
+          const m = Math.floor(sec / 60);
+          const s = (sec % 60).toFixed(0).padStart(2, '0');
+          return `${m}分${s}秒`;
         }
 
         function sourceTypeLabel(t) {
@@ -1713,15 +1726,8 @@
               task.video_title = d.video_title || null;
               updateMeta(d);
 
-              // Update 7 step states based on backend progress
-              const p = d.progress;
-              if (p >= 10) setStepState(0, 'done');
-              if (p >= 10) setStepState(1, 'active');
-              if (p >= 25) { setStepState(1, 'done'); setStepState(2, 'active'); }
-              if (p >= 40) { setStepState(2, 'done'); setStepState(3, 'active'); }
-              if (p >= 58) { setStepState(3, 'done'); setStepState(4, 'active'); }
-              if (p >= 66) { setStepState(4, 'done'); setStepState(5, 'active'); }
-              if (p >= 90) { setStepState(5, 'done'); setStepState(6, 'active'); }
+              // step_idx 已在 updateMeta 中处理步骤状态
+              // 此处无需再用 progress 阈值推断
 
               if (d.status === 'completed') {
                 setStepState(6, 'done');
@@ -1741,11 +1747,21 @@
         function updateMeta(d) {
           const fields = ['source_type', 'asr_model_used', 'llm_model_used', 'asr_sentences',
             'asr_duration', 'llm_duration', 'total_duration', 'rec_type', 'cache_hit',
-            'file_size', 'audio_duration', 'asr_chars', 'cleaned_sentences'];
+            'file_size', 'audio_duration', 'asr_chars', 'cleaned_sentences',
+            'step_idx', 'download_progress'];
           for (const f of fields) {
             if (d[f] !== undefined) meta[f] = d[f];
           }
           if (d.video_title) { meta.video_title = d.video_title; task.video_title = d.video_title; }
+          // 用 step_idx 精确控制步骤状态
+          if (d.step_idx !== undefined && d.step_idx >= 0) {
+            const idx = d.step_idx;
+            for (let i = 0; i < steps.length; i++) {
+              if (i < idx) { if (steps[i].state !== 'done') setStepState(i, 'done'); }
+              else if (i === idx) { if (steps[i].state !== 'active') setStepState(i, 'active'); }
+              else { if (steps[i].state !== 'pending') steps[i].state = 'pending'; }
+            }
+          }
         }
 
         function getActiveStep() {
@@ -1838,6 +1854,7 @@
             asr_sentences: 0, asr_duration: 0, llm_duration: 0, total_duration: 0,
             rec_type: '', cache_hit: false, file_size: 0, audio_duration: 0,
             asr_chars: 0, cleaned_sentences: 0, video_title: '',
+            step_idx: -1, download_progress: 0,
           });
           resetSteps();
         }
@@ -1879,7 +1896,7 @@
           asrModels, llmModels, selectedAsrModel, selectedLlmModel,
           meta, detailsOpen, stageTimings,
           onDrop, onFileSelect, submitUrl, downloadResult, copyResult, resetAll,
-          formatTime, formatFileSize, sourceTypeLabel, recTypeLabel,
+          formatTime, formatFileSize, formatDuration, sourceTypeLabel, recTypeLabel,
           switchToAsr, downloadAsr, toggleTheme,
         };
       }

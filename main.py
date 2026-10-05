@@ -166,7 +166,7 @@ def transcript_only(
             asr_input = audio
             preprocessed = None
         else:
-            preprocessed = preprocess_audio(
+            preprocessed, _ = preprocess_audio(
                 audio, sample_rate=settings.asr_sample_rate)
             asr_input = preprocessed
 

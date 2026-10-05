@@ -118,8 +118,8 @@ async def extract_audio(state: AgentState) -> dict:
     if source_type in ("local_video", "url_video"):
         from agent.video_client import extract_audio_from_video
 
-        _notify(task_id, step="正在提取音频...", progress=10,
-                source_type=source_type)
+        _notify(task_id, step="正在提取音频...", progress=5,
+                source_type=source_type, step_idx=0)
         logger.info(f"[任务 {task_id}] 从视频提取音频...")
 
         filename_stem = state["audio_stem"]
@@ -138,22 +138,35 @@ async def extract_audio(state: AgentState) -> dict:
                     updates["video_title"] = title
                     updates["audio_stem"] = new_stem
                     filename_stem = new_stem
-                    _notify(task_id, video_title=title)
+                    duration = video_info.get("duration")
+                    _notify(task_id, video_title=title, step_idx=0,
+                            audio_duration=duration or 0)
                     logger.info(f"[任务 {task_id}] 视频标题: {title}")
             else:
                 logger.warning(f"[任务 {task_id}] 无法获取视频信息，使用 URL stem")
 
+        # 下载进度回调: 实时通知前端下载百分比
+        def _dl_progress(percent: float):
+            _notify(task_id,
+                    step=f"正在下载视频... {percent:.0f}%",
+                    progress=5, step_idx=0,
+                    download_progress=round(percent, 1))
+
         audio_path = await extract_audio_from_video(
-            source, filename_stem=filename_stem)
+            source, filename_stem=filename_stem,
+            progress_cb=_dl_progress)
 
         logger.info(f"[任务 {task_id}] 音频提取完成: {audio_path.name}")
-        _notify(task_id, step="音频提取完成", progress=22)
+        # 获取提取后的音频文件大小
+        audio_file_size = audio_path.stat().st_size if audio_path.exists() else 0
+        _notify(task_id, step="音频提取完成", progress=20,
+                step_idx=0, file_size=audio_file_size)
         updates["audio_path"] = str(audio_path)
         return updates
 
     # 音频源: 无需提取
     _notify(task_id, step="音频源，跳过提取", progress=5,
-            source_type=source_type)
+            source_type=source_type, step_idx=0)
     return {}
 
 
@@ -164,20 +177,20 @@ async def preprocess(state: AgentState) -> dict:
 
     # URL 音频直接传给 ASR，跳过预处理
     if source_type == "url_audio":
-        _notify(task_id, step="URL 音频，跳过预处理", progress=38)
+        _notify(task_id, step="URL 音频，跳过预处理", progress=35, step_idx=1)
         return {"asr_input": state["source"]}
 
     # 本地音频 or 从视频提取的音频 → 预处理
     audio_path = state.get("audio_path") or state["source"]
-    _notify(task_id, step="正在预处理音频...", progress=25)
+    _notify(task_id, step="正在预处理音频...", progress=22, step_idx=1)
     logger.info(f"[任务 {task_id}] 预处理音频: {Path(audio_path).name}")
 
     from utils.audio import preprocess_audio
 
-    preprocessed = preprocess_audio(
+    preprocessed, audio_duration = preprocess_audio(
         audio_path, sample_rate=settings.asr_sample_rate)
 
-    logger.info(f"[任务 {task_id}] 预处理完成: {preprocessed.name}")
+    logger.info(f"[任务 {task_id}] 预处理完成: {preprocessed.name}, 时长 {audio_duration:.1f}s")
 
     # 清理提取的临时音频文件 (视频路径)
     if state.get("audio_path"):
@@ -186,7 +199,8 @@ async def preprocess(state: AgentState) -> dict:
         except Exception:
             pass
 
-    _notify(task_id, step="预处理完成，准备转写...", progress=38)
+    _notify(task_id, step="预处理完成，准备转写...", progress=35,
+            step_idx=1, audio_duration=round(audio_duration, 1))
     return {
         "preprocessed_path": str(preprocessed),
         "asr_input": str(preprocessed),
@@ -206,7 +220,7 @@ async def asr_transcribe(state: AgentState) -> dict:
                     if state.get("asr_model") else None)
     asr_model = asr.model
     _notify(task_id, step="正在语音转写...", progress=40,
-            asr_model_used=asr_model)
+            asr_model_used=asr_model, step_idx=2)
 
     t0 = time.time()
     transcript = await asr.transcribe(asr_input)
@@ -227,7 +241,8 @@ async def asr_transcribe(state: AgentState) -> dict:
             pass
 
     _notify(task_id, step=f"转写完成 ({sentence_count} 句)",
-            progress=50, asr_sentences=sentence_count,
+            progress=55, step_idx=2,
+            asr_sentences=sentence_count,
             asr_duration=round(asr_duration, 1),
             asr_chars=len(transcript_text))
 
@@ -260,8 +275,8 @@ async def text_clean(state: AgentState) -> dict:
     asr_path = save_asr_cache(cleaned_text, state["audio_stem"])
     cleaned_count = len(cleaned.sentences)
     _notify(task_id, asr_result_path=str(asr_path),
-            step=f"文本清洗完成 ({cleaned_count} 句)", progress=58,
-            cleaned_sentences=cleaned_count)
+            step=f"文本清洗完成 ({cleaned_count} 句)", progress=60,
+            step_idx=3, cleaned_sentences=cleaned_count)
     logger.info(f"[任务 {task_id}] 文本预处理完成：{cleaned_count} 句")
 
     return {"transcript_text": cleaned_text}
@@ -275,11 +290,11 @@ async def classify(state: AgentState) -> dict:
     # 视频源不走分类，直接归为 general
     if source_type in ("local_video", "url_video"):
         logger.info(f"[任务 {task_id}] 视频源，跳过分类 (general)")
-        _notify(task_id, step="视频源，跳过分类", progress=62,
-                rec_type="general")
+        _notify(task_id, step="视频源，跳过分类", progress=65,
+                step_idx=4, rec_type="general")
         return {"rec_type": "general"}
 
-    _notify(task_id, step="正在识别录音类型...", progress=62)
+    _notify(task_id, step="正在识别录音类型...", progress=62, step_idx=4)
     logger.info(f"[任务 {task_id}] 开始分类...")
 
     from agent.classifier import classify_recording
@@ -287,7 +302,7 @@ async def classify(state: AgentState) -> dict:
     rec_type = await classify_recording(state["transcript_text"])
     logger.info(f"[任务 {task_id}] 分类结果: {rec_type}")
     _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
-            rec_type=rec_type)
+            step_idx=4, rec_type=rec_type)
 
     return {"rec_type": rec_type}
 
@@ -309,6 +324,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
         task_id,
         step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...",
         progress=70,
+        step_idx=5,
         llm_model_used=llm_model or "自动",
     )
 
@@ -333,7 +349,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
         save_summary_cache(output_text, audio_stem, rec_type="meeting")
         llm_dur = time.time() - llm_start
         _notify(task_id, step="会议分析完成", progress=90,
-                llm_duration=round(llm_dur, 1))
+                step_idx=5, llm_duration=round(llm_dur, 1))
 
         return {
             "output_text": output_text,
@@ -367,7 +383,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
         (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
         llm_dur = time.time() - llm_start
         _notify(task_id, step="面试分析完成", progress=90,
-                llm_duration=round(llm_dur, 1))
+                step_idx=5, llm_duration=round(llm_dur, 1))
 
         return {
             "output_text": a_md,
@@ -384,14 +400,14 @@ async def analyze_dispatch(state: AgentState) -> dict:
         output_text = cached
         logger.info(f"[任务 {task_id}] 使用 Summary 缓存")
         _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
-                cache_hit=True, llm_duration=0)
+                step_idx=5, cache_hit=True, llm_duration=0)
     else:
         data = await analyze_general(transcript_text, llm_model=llm_model)
         output_text = format_general_result(data, None, timing_info)
         save_summary_cache(output_text, audio_stem, rec_type=rec_type)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="通用分析完成", progress=90,
-                cache_hit=False, llm_duration=round(llm_dur, 1))
+                step_idx=5, cache_hit=False, llm_duration=round(llm_dur, 1))
 
     return {
         "output_text": output_text,
@@ -426,9 +442,9 @@ async def format_output(state: AgentState) -> dict:
     if pipeline_start:
         total_dur = time.time() - pipeline_start
         _notify(task_id, step="分析完成", progress=100,
-                total_duration=round(total_dur, 1))
+                step_idx=6, total_duration=round(total_dur, 1))
     else:
-        _notify(task_id, step="分析完成", progress=100)
+        _notify(task_id, step="分析完成", progress=100, step_idx=6)
 
     logger.info(f"[任务 {task_id}] 流水线执行完成")
     return {}
