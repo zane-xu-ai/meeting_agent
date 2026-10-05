@@ -107,6 +107,154 @@ class LLMClient:
         )
         return content
 
+    async def chat_messages(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ) -> str:
+        """
+        发送多轮对话请求 (完整 messages 列表)，支持模型列表自动 fallback。
+
+        用于多轮对话场景，messages 包含完整的对话历史 (system/user/assistant)。
+
+        Args:
+            messages: 完整对话消息列表 [{"role": "system"|"user"|"assistant", "content": "..."}]
+            temperature: 温度参数
+            max_tokens: 最大输出 token 数
+
+        Returns:
+            模型输出文本
+        """
+        last_error = None
+        for model in self.models:
+            self.model = model
+            try:
+                return await self._chat_messages_with_model(messages, temperature, max_tokens)
+            except Exception as e:
+                last_error = e
+                logger.warning(f"LLM 模型 {model} (messages) 失败: {e}，尝试下一个...")
+                if model != self.models[-1]:
+                    continue
+                raise RuntimeError(
+                    f"所有 LLM 模型 (messages) 均失败。最后一个错误 ({model}): {last_error}"
+                ) from last_error
+
+    async def _chat_messages_with_model(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """使用当前 self.model 发送多轮对话"""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            logger.debug(f"调用 LLM (messages): {self.model}, turns={len(messages)}")
+            resp = await client.post(self.chat_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            result = resp.json()
+
+        content = result["choices"][0]["message"]["content"]
+        usage = result.get("usage", {})
+        logger.info(
+            f"LLM 响应 (messages): model={self.model}, "
+            f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"completion_tokens={usage.get('completion_tokens', '?')}"
+        )
+        return content
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+        tool_choice: str = "auto",
+    ) -> dict:
+        """
+        发送对话请求并支持 Function Calling (Tool Use)。
+
+        支持模型列表自动 fallback: 若当前模型不支持 tools，尝试下一个。
+
+        Args:
+            messages: 完整对话消息列表 (含 system/user/tool roles)
+            tools: OpenAI tools 格式的工具定义
+            temperature: 温度参数
+            max_tokens: 最大输出 token 数
+            tool_choice: 工具选择策略 ("auto" | "none" | "required")
+
+        Returns:
+            模型响应 message dict:
+            - 有 tool_calls 时: {"role": "assistant", "tool_calls": [...]}
+            - 无 tool_calls 时: {"role": "assistant", "content": "..."}
+        """
+        last_error = None
+        for model in self.models:
+            self.model = model
+            try:
+                return await self._chat_with_model_tools(
+                    messages, tools, temperature, max_tokens, tool_choice
+                )
+            except Exception as e:
+                last_error = e
+                logger.warning(f"LLM 模型 {model} (tools) 失败: {e}，尝试下一个...")
+                if model != self.models[-1]:
+                    continue
+                raise RuntimeError(
+                    f"所有 LLM 模型 (tools) 均失败。最后一个错误 ({model}): {last_error}"
+                ) from last_error
+
+    async def _chat_with_model_tools(
+        self,
+        messages: list[dict],
+        tools: list[dict],
+        temperature: float,
+        max_tokens: int,
+        tool_choice: str,
+    ) -> dict:
+        """使用当前 self.model 执行带 tools 的对话"""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            logger.debug(f"调用 LLM (tools): {self.model}, tools={len(tools)}")
+            resp = await client.post(self.chat_url, json=payload, headers=headers)
+            resp.raise_for_status()
+            result = resp.json()
+
+        message = result["choices"][0]["message"]
+        usage = result.get("usage", {})
+        has_tool_calls = bool(message.get("tool_calls"))
+        logger.info(
+            f"LLM 响应 (tools): model={self.model}, "
+            f"tool_calls={'yes' if has_tool_calls else 'no'}, "
+            f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"completion_tokens={usage.get('completion_tokens', '?')}"
+        )
+        return message
+
     async def chat_json(
         self,
         prompt: str,

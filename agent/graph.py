@@ -3,14 +3,20 @@
 使用 LangGraph StateGraph 统一 4 条处理路径:
   local_audio / local_video / url_audio / url_video
 
-图结构:
+图结构 (M1 — Function Calling):
     START → extract_audio → preprocess → asr_transcribe → text_clean
-          → classify → [route] → analyze_* → format_output → END
+          → agent_loop → format_output → END
+
+agent_loop 节点通过 Function Calling 让 LLM 自主决策:
+    1. 调用 classify_recording 工具 → 识别录音类型
+    2. 调用 analyze_meeting/interview/general 工具 → 生成分析结果
+    若 Tool Calling 失败，自动降级为传统硬编码路由。
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -452,26 +458,286 @@ async def format_output(state: AgentState) -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════
-# 条件路由
+# Agent Loop (Function Calling)
 # ═══════════════════════════════════════════════════════════════
 
 
-def route_by_type(state: AgentState) -> str:
-    """根据录音类型和来源决定分析分支
+AGENT_SYSTEM_PROMPT = """你是一个智能会议分析 Agent。你的任务是分析音视频转写文本并生成结构化报告。
 
-    - meeting → analyze_meeting (独立会议分析)
-    - interview → analyze_interview (面试逐题分析)
-    - video / general → analyze_general (通用分析)
+## 工作流程
+
+1. **第一步 — 分类**: 调用 `classify_recording` 工具，根据转写内容判断录音类型
+   - meeting: 多人工作会议，有议题讨论和决策
+   - interview: 面试场景，有提问-回答模式
+   - general: 其他类型（讲座、访谈、日常交流等）
+
+2. **第二步 — 分析**: 根据分类结果，调用对应的分析工具
+   - meeting → `analyze_meeting`
+   - interview → `analyze_interview`
+   - general → `analyze_general`
+
+## 规则
+
+- 必须先分类，再分析，不可跳过任何一步
+- 分类依据内容特征判断，不要猜测
+- 将转写文本完整传给分析工具，不要截断
+"""
+
+
+async def agent_loop(state: AgentState) -> dict:
+    """节点: Agent 智能分析循环 (Function Calling)
+
+    LLM 通过 Tool Use 自主决策:
+      1. classify_recording → 识别录音类型
+      2. analyze_meeting/interview/general → 生成分析结果
+
+    若 Tool Calling 失败（模型不支持等），自动降级为传统硬编码路由。
     """
-    rec_type = state.get("rec_type", "general")
-    source_type = state.get("source_type", "")
+    task_id = state["task_id"]
+    transcript_text = state["transcript_text"]
+    source_type = state["source_type"]
+    llm_model = state.get("llm_model")
 
+    llm_start = time.time()
+    timing_info = _build_timing(state["asr_duration"], llm_start)
+
+    # ── 视频源跳过分类，直接走传统路径 (避免浪费 Tool 调用) ──
+    if source_type in ("local_video", "url_video"):
+        logger.info(f"[任务 {task_id}] 视频源，跳过 Agent 分类 (general)")
+        _notify(task_id, step="视频源，跳过分类", progress=65,
+                step_idx=4, rec_type="general")
+        result = await _fallback_analyze(state, "general", llm_start, timing_info)
+        result["llm_start"] = llm_start
+        return result
+
+    _notify(task_id, step="正在智能分析 (Function Calling)...",
+            progress=62, step_idx=4)
+
+    from agent.tools import TOOL_SCHEMAS, TOOL_REGISTRY, ToolContext
+    from agent.llm_client import LLMClient
+
+    logger.info(f"[任务 {task_id}] Agent Loop 启动: "
+                f"{len(transcript_text)} 字符, {len(TOOL_SCHEMAS)} 个工具")
+
+    llm = LLMClient(models=[llm_model] if llm_model else None)
+
+    # 构建工具上下文
+    tool_ctx = ToolContext(
+        transcript_text=transcript_text,
+        audio_stem=state["audio_stem"],
+        llm_model=llm_model,
+        timing_info=timing_info,
+        task_id=task_id,
+    )
+
+    # 初始消息
+    messages: list[dict] = [
+        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+        {"role": "user", "content": f"请分析以下转写文本:\n\n{transcript_text}"},
+    ]
+
+    # ── Agent 循环: LLM 自主决策调用工具 ──
+    max_iterations = 10
+    output_text = ""
+    rec_type = "general"
+
+    try:
+        for iteration in range(max_iterations):
+            logger.debug(f"[任务 {task_id}] Agent 迭代 {iteration + 1}/{max_iterations}")
+
+            response = await llm.chat_with_tools(
+                messages=messages,
+                tools=TOOL_SCHEMAS,
+                tool_choice="auto",
+            )
+
+            tool_calls = response.get("tool_calls")
+
+            # ── 无 Tool 调用: LLM 给出最终响应 ──
+            if not tool_calls:
+                content = response.get("content", "")
+                if output_text:
+                    # 已有分析工具结果，直接返回
+                    break
+                # LLM 未调用工具就返回了文本，降级到传统路径
+                logger.warning(f"[任务 {task_id}] LLM 未调用工具，降级到传统路由")
+                rec_type = await _fallback_classify(state)
+                _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
+                        step_idx=4, rec_type=rec_type)
+                result = await _fallback_analyze(state, rec_type, llm_start, timing_info)
+                result["rec_type"] = rec_type
+                result["llm_start"] = llm_start
+                return result
+
+            # ── 有 Tool 调用: 执行工具并继续循环 ──
+            messages.append(response)  # assistant + tool_calls
+
+            for tc in tool_calls:
+                fn_name = tc["function"]["name"]
+                fn_args = json.loads(tc["function"]["arguments"])
+                tc_id = tc["id"]
+
+                logger.info(f"[任务 {task_id}] Tool Call: {fn_name}({list(fn_args.keys())})")
+                _notify(task_id, step=f"Agent 调用: {fn_name}",
+                        progress=65, step_idx=4)
+
+                tool_fn = TOOL_REGISTRY.get(fn_name)
+                if not tool_fn:
+                    tool_result = {"error": f"未知工具: {fn_name}"}
+                    logger.warning(f"[任务 {task_id}] 未知工具: {fn_name}")
+                else:
+                    tool_result = await tool_fn(fn_args, tool_ctx)
+                    logger.info(f"[任务 {task_id}] Tool {fn_name} 执行完成")
+
+                # 收集关键结果
+                if "rec_type" in tool_result:
+                    rec_type = tool_result["rec_type"]
+                    _notify(task_id, rec_type=rec_type, step_idx=4)
+                if "output_text" in tool_result:
+                    output_text = tool_result["output_text"]
+
+                # 追加 tool 结果到消息历史
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": json.dumps(tool_result, ensure_ascii=False),
+                })
+
+            # 分析工具返回了最终结果，结束循环
+            if output_text:
+                _notify(task_id, step=f"{rec_type} 分析完成",
+                        progress=90, step_idx=4,
+                        llm_duration=round(time.time() - llm_start, 1))
+                break
+        else:
+            # 达到最大迭代次数
+            logger.warning(f"[任务 {task_id}] Agent 循环达到上限 ({max_iterations})")
+            if not output_text:
+                rec_type = await _fallback_classify(state)
+                result = await _fallback_analyze(state, rec_type, llm_start, timing_info)
+                result["rec_type"] = rec_type
+                result["llm_start"] = llm_start
+                return result
+
+    except Exception as e:
+        logger.error(f"[任务 {task_id}] Agent Loop 异常: {e}，降级到传统路由")
+        rec_type = await _fallback_classify(state)
+        result = await _fallback_analyze(state, rec_type, llm_start, timing_info)
+        result["rec_type"] = rec_type
+        result["llm_start"] = llm_start
+        return result
+
+    return {
+        "rec_type": rec_type,
+        "output_text": output_text,
+        "llm_start": llm_start,
+    }
+
+
+# ── 降级函数: 传统分类 + 分析 (当 Tool Calling 失败时使用) ──
+
+
+async def _fallback_classify(state: AgentState) -> str:
+    """降级分类: 使用传统 classifier.py (非 Tool Calling)"""
+    task_id = state["task_id"]
+    source_type = state["source_type"]
+
+    if source_type in ("local_video", "url_video"):
+        return "general"
+
+    _notify(task_id, step="正在识别录音类型...", progress=62, step_idx=4)
+    from agent.classifier import classify_recording
+    rec_type = await classify_recording(state["transcript_text"])
+    logger.info(f"[任务 {task_id}] 降级分类结果: {rec_type}")
+    _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
+            step_idx=4, rec_type=rec_type)
+    return rec_type
+
+
+async def _fallback_analyze(
+    state: AgentState, rec_type: str,
+    llm_start: float, timing_info: dict,
+) -> dict:
+    """降级分析: 使用传统 pipeline.py 函数 (非 Tool Calling)"""
+    task_id = state["task_id"]
+    transcript_text = state["transcript_text"]
+    llm_model = state.get("llm_model")
+    audio_stem = state["audio_stem"]
+
+    type_labels = {
+        "meeting": "会议录音", "interview": "面试录音",
+        "general": "其他录音", "video": "视频内容",
+    }
+    _notify(task_id,
+            step=f"正在分析 ({type_labels.get(rec_type, rec_type)})...",
+            progress=70, step_idx=5,
+            llm_model_used=llm_model or "自动")
+
+    # ── 会议 ──
     if rec_type == "meeting":
-        return "analyze_meeting"
+        from agent.llm_client import LLMClient
+        from agent.prompts import MEETING_ANALYSIS_PROMPT
+        from agent.pipeline import format_markdown
+        from agent.cache import save_summary_cache
+        from models.schemas import MeetingResult
+
+        llm = LLMClient(models=[llm_model] if llm_model else None)
+        prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
+        data = await llm.chat_json(prompt)
+        result = MeetingResult.model_validate(data)
+        output_text = format_markdown(
+            result, event_time=None, timing_info=timing_info)
+        save_summary_cache(output_text, audio_stem, rec_type="meeting")
+        llm_dur = time.time() - llm_start
+        _notify(task_id, step="会议分析完成", progress=90,
+                step_idx=5, llm_duration=round(llm_dur, 1))
+        return {"output_text": output_text}
+
+    # ── 面试 ──
     if rec_type == "interview":
-        return "analyze_interview"
-    # 视频源始终走通用分析; 其他 general 也走通用
-    return "analyze_general"
+        from agent.pipeline import (
+            analyze_interview, format_interview_questions,
+            format_interview_analysis,
+        )
+
+        result_raw = await analyze_interview(
+            transcript_text, llm_model=llm_model)
+        q_md = format_interview_questions(
+            result_raw["q_data"], None, timing_info)
+        a_md = format_interview_analysis(
+            result_raw["a_data"], None, timing_info)
+
+        result_dir = (
+            settings.output_dir / "summary" / "interview"
+            / f"{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
+        )
+        result_dir.mkdir(parents=True, exist_ok=True)
+        (result_dir / "question.md").write_text(q_md, encoding="utf-8")
+        (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
+        llm_dur = time.time() - llm_start
+        _notify(task_id, step="面试分析完成", progress=90,
+                step_idx=5, llm_duration=round(llm_dur, 1))
+        return {"output_text": a_md, "result_path": str(result_dir / "analyze.md")}
+
+    # ── 通用 / 视频 ──
+    from agent.pipeline import analyze_general, format_general_result
+    from agent.cache import load_summary_cache, save_summary_cache
+
+    cached = load_summary_cache(audio_stem, rec_type=rec_type)
+    if cached is not None:
+        output_text = cached
+        logger.info(f"[任务 {task_id}] 使用 Summary 缓存")
+        _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
+                step_idx=5, cache_hit=True, llm_duration=0)
+    else:
+        data = await analyze_general(transcript_text, llm_model=llm_model)
+        output_text = format_general_result(data, None, timing_info)
+        save_summary_cache(output_text, audio_stem, rec_type=rec_type)
+        llm_dur = time.time() - llm_start
+        _notify(task_id, step="通用分析完成", progress=90,
+                step_idx=5, cache_hit=False, llm_duration=round(llm_dur, 1))
+
+    return {"output_text": output_text}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -480,7 +746,11 @@ def route_by_type(state: AgentState) -> str:
 
 
 def _build_graph():
-    """构建并编译 LangGraph 状态图"""
+    """构建并编译 LangGraph 状态图
+
+    M1 重构: classify + analyze_* 合并为 agent_loop (Function Calling)
+    降级路径: agent_loop 异常时自动回退到传统硬编码路由
+    """
     from langgraph.graph import StateGraph, START, END
 
     builder = StateGraph(AgentState)
@@ -490,10 +760,7 @@ def _build_graph():
     builder.add_node("preprocess", preprocess)
     builder.add_node("asr_transcribe", asr_transcribe)
     builder.add_node("text_clean", text_clean)
-    builder.add_node("classify", classify)
-    builder.add_node("analyze_meeting", analyze_dispatch)
-    builder.add_node("analyze_interview", analyze_dispatch)
-    builder.add_node("analyze_general", analyze_dispatch)
+    builder.add_node("agent_loop", agent_loop)       # Function Calling 节点
     builder.add_node("format_output", format_output)
 
     # 线性边
@@ -501,23 +768,8 @@ def _build_graph():
     builder.add_edge("extract_audio", "preprocess")
     builder.add_edge("preprocess", "asr_transcribe")
     builder.add_edge("asr_transcribe", "text_clean")
-    builder.add_edge("text_clean", "classify")
-
-    # 条件路由: classify → 分析分支
-    builder.add_conditional_edges(
-        "classify",
-        route_by_type,
-        {
-            "analyze_meeting": "analyze_meeting",
-            "analyze_interview": "analyze_interview",
-            "analyze_general": "analyze_general",
-        },
-    )
-
-    # 所有分析分支汇聚到 format_output
-    builder.add_edge("analyze_meeting", "format_output")
-    builder.add_edge("analyze_interview", "format_output")
-    builder.add_edge("analyze_general", "format_output")
+    builder.add_edge("text_clean", "agent_loop")
+    builder.add_edge("agent_loop", "format_output")
     builder.add_edge("format_output", END)
 
     return builder.compile()

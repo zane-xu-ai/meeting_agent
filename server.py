@@ -110,10 +110,19 @@ class UploadRequest(BaseModel):
     llm_model: str | None = None
 
 
+class ChatRequest(BaseModel):
+    message: str
+
+
 # ── Task Store ───────────────────────────────────────────────
 
 tasks: dict[str, dict] = {}
 tasks_lock = threading.Lock()
+
+# ── Chat History Store ──────────────────────────────────────────
+# 每个 task_id 维护独立的对话历史，用于多轮追问
+chat_histories: dict[str, list[dict]] = {}
+chat_lock = threading.Lock()
 
 
 def _new_task_id() -> str:
@@ -405,6 +414,107 @@ async def get_models():
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "api_key_configured": bool(settings.dashscope_api_key)}
+
+
+# ── Chat (Multi-turn Dialogue) ────────────────────────────────
+
+CHAT_SYSTEM_PROMPT = """你是一个智能会议分析助手。用户刚刚完成了一段音视频的分析，现在想要基于分析结果进行追问。
+
+## 你的上下文
+
+你拥有以下信息来回答用户的问题:
+1. **转写文本**: 音视频的完整转写内容
+2. **分析报告**: 已经生成的结构化分析结果 (会议纪要/面试评估/内容总结)
+3. **对话历史**: 之前的追问和回答
+
+## 回答规则
+
+- 基于转写文本和分析报告回答，不要编造信息
+- 如果用户问的内容在转写文本中没有，如实告知
+- 回答要简洁、准确、有条理
+- 支持中英文回答"""
+
+
+@app.post("/api/chat/{task_id}")
+async def chat_with_task(task_id: str, req: ChatRequest):
+    """基于已完成任务的分析结果进行多轮追问"""
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+    task = tasks[task_id]
+    if task["status"] != "completed":
+        raise HTTPException(400, "任务尚未完成，无法追问")
+
+    user_message = req.message.strip()
+    if not user_message:
+        raise HTTPException(400, "消息不能为空")
+
+    # 获取转写文本作为上下文
+    transcript_text = ""
+    asr_path = task.get("asr_result_path")
+    if asr_path and Path(asr_path).exists():
+        transcript_text = Path(asr_path).read_text(encoding="utf-8")
+
+    # 获取分析报告作为上下文
+    analysis_text = ""
+    result_path = task.get("result_path")
+    if result_path and Path(result_path).exists():
+        analysis_text = Path(result_path).read_text(encoding="utf-8")
+
+    # 构建对话历史上下文 (截断避免超出 token 限制)
+    max_transcript_len = 6000  # 转写文本截断
+    max_analysis_len = 4000    # 分析报告截断
+    ctx_transcript = transcript_text[:max_transcript_len]
+    ctx_analysis = analysis_text[:max_analysis_len]
+
+    # 构建 messages: system + 上下文 + 对话历史 + 当前问题
+    system_content = CHAT_SYSTEM_PROMPT
+    if ctx_transcript:
+        system_content += f"\n\n## 转写文本\n\n{ctx_transcript}"
+    if ctx_analysis:
+        system_content += f"\n\n## 分析报告\n\n{ctx_analysis}"
+
+    messages: list[dict] = [{"role": "system", "content": system_content}]
+
+    # 追加历史对话 (最近 10 轮)
+    with chat_lock:
+        history = chat_histories.get(task_id, [])
+        recent_history = history[-20:]  # 最近 10 轮 (每轮 user+assistant)
+        messages.extend(recent_history)
+
+    # 追加当前用户消息
+    messages.append({"role": "user", "content": user_message})
+
+    # 调用 LLM
+    try:
+        from agent.llm_client import LLMClient
+        llm = LLMClient()
+        reply = await llm.chat_messages(messages, temperature=0.5, max_tokens=2048)
+
+        # 保存对话历史
+        with chat_lock:
+            if task_id not in chat_histories:
+                chat_histories[task_id] = []
+            chat_histories[task_id].append({"role": "user", "content": user_message})
+            chat_histories[task_id].append({"role": "assistant", "content": reply})
+
+        logger.info(f"[任务 {task_id}] 追问对话: user='{user_message[:50]}...' → "
+                    f"reply={len(reply)} chars")
+
+        return {"reply": reply}
+
+    except Exception as e:
+        logger.error(f"[任务 {task_id}] 追问失败: {e}")
+        raise HTTPException(500, f"对话失败: {e}")
+
+
+@app.get("/api/chat/{task_id}/history")
+async def get_chat_history(task_id: str):
+    """获取任务的对话历史"""
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+    with chat_lock:
+        history = chat_histories.get(task_id, [])
+    return {"messages": history}
 
 
 # ── Serve Frontend ───────────────────────────────────────────

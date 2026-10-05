@@ -1,12 +1,14 @@
 # Meeting Agent — Agent 化演进路线图
 
 > LangGraph 流水线重构 (p01) 和流水线问题修复 (p02) 已完成。
-> 本计划定义从"智能管道"进化为"真正 AI Agent"的后续路线。
+> **M1 Function Calling 已完成** ✅ (2026-10-05)
+> **M2 多轮对话已完成** ✅ (2026-10-05)
+> 本计划定义从“智能管道”进化为“真正 AI Agent”的后续路线。
 
 ## 当前架构总结
 
 ```
-用户 → 上传音视频 → LangGraph StateGraph (9 节点) → ASR → LLM 分析 → Markdown 报告
+用户 → 上传音视频 → LangGraph StateGraph (6 节点) → ASR → Agent Loop (Function Calling) → Markdown 报告
 ```
 
 - **已完成**: 4 种输入源统一、LangGraph StateGraph、进度回调 + step_idx、前端 7 步详细流程 + 折叠详情面板
