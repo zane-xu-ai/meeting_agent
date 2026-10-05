@@ -1378,14 +1378,16 @@
       <div v-if="phase === 'done'" class="details-panel">
         <div class="details-header" @click="detailsOpen = !detailsOpen">
           <div class="details-header-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
               <circle cx="12" cy="12" r="10" />
               <line x1="12" y1="16" x2="12" y2="12" />
               <line x1="12" y1="8" x2="12.01" y2="8" />
             </svg>
             处理详情
           </div>
-          <svg class="details-chevron" :class="{ open: detailsOpen }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg class="details-chevron" :class="{ open: detailsOpen }" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9" />
           </svg>
         </div>
@@ -1400,7 +1402,9 @@
               </div>
               <div class="detail-row" v-if="meta.video_title">
                 <span class="detail-label">视频标题</span>
-                <span class="detail-value" style="font-family:inherit;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" :title="meta.video_title">{{ meta.video_title }}</span>
+                <span class="detail-value"
+                  style="font-family:inherit;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+                  :title="meta.video_title">{{ meta.video_title }}</span>
               </div>
               <div class="detail-row" v-if="task.filename">
                 <span class="detail-label">文件名</span>
@@ -1461,7 +1465,8 @@
               </div>
               <div class="detail-row" v-if="meta.cache_hit !== undefined">
                 <span class="detail-label">缓存命中</span>
-                <span class="detail-value" :class="meta.cache_hit ? 'success' : ''">{{ meta.cache_hit ? '是' : '否' }}</span>
+                <span class="detail-value" :class="meta.cache_hit ? 'success' : ''">{{ meta.cache_hit ? '是' : '否'
+                  }}</span>
               </div>
             </div>
           </div>
@@ -1734,9 +1739,9 @@
         }
 
         function updateMeta(d) {
-          const fields = ['source_type','asr_model_used','llm_model_used','asr_sentences',
-            'asr_duration','llm_duration','total_duration','rec_type','cache_hit',
-            'file_size','audio_duration','asr_chars','cleaned_sentences'];
+          const fields = ['source_type', 'asr_model_used', 'llm_model_used', 'asr_sentences',
+            'asr_duration', 'llm_duration', 'total_duration', 'rec_type', 'cache_hit',
+            'file_size', 'audio_duration', 'asr_chars', 'cleaned_sentences'];
           for (const f of fields) {
             if (d[f] !== undefined) meta[f] = d[f];
           }
@@ -1760,7 +1765,7 @@
               const sr = await fetch(`${API}/api/status/${task.task_id}`);
               const sd = await sr.json();
               updateMeta(sd);
-            } catch {}
+            } catch { }
             phase.value = 'done';
             stopStepTimer();
           } catch (e) {
