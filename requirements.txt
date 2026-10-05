@@ -10,3 +10,4 @@ yt-dlp>=2024.0.0
 fastapi>=0.100.0
 uvicorn>=0.20.0
 python-multipart>=0.0.6
+langgraph>=0.4.0

@@ -191,18 +191,23 @@ class MeetingPipeline:
 
 async def analyze_interview(
     transcript_text: str,
+    llm_model: str | None = None,
 ) -> dict:
     """
     面试录音分析: 调用 LLM 获取问题和评分的原始 JSON 数据。
 
     长文本采用分段提取 + 合并策略 (滑动窗口)。
 
+    Args:
+        transcript_text: 转写文本
+        llm_model: 指定 LLM 模型，None 使用默认模型列表
+
     Returns:
         {"q_data": {...}, "a_data": {...}} 两份原始 JSON 数据
     """
     from agent.text_processor import TextProcessor
 
-    llm = LLMClient()
+    llm = LLMClient(models=[llm_model] if llm_model else None)
     estimated_tokens = len(transcript_text) // 2
 
     if estimated_tokens <= settings.max_tokens_per_chunk:
@@ -394,14 +399,19 @@ def format_interview_analysis(
 
 async def analyze_general(
     transcript_text: str,
+    llm_model: str | None = None,
 ) -> dict:
     """
     通用录音分析: 调用 LLM 获取原始 JSON 数据。
 
+    Args:
+        transcript_text: 转写文本
+        llm_model: 指定 LLM 模型，None 使用默认模型列表
+
     Returns:
         原始 JSON 数据 dict
     """
-    llm = LLMClient()
+    llm = LLMClient(models=[llm_model] if llm_model else None)
     estimated_tokens = len(transcript_text) // 2
 
     if estimated_tokens <= settings.max_tokens_per_chunk:

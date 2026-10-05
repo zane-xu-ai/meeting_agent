@@ -1,0 +1,32 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	extract_audio(extract_audio)
+	preprocess(preprocess)
+	asr_transcribe(asr_transcribe)
+	text_clean(text_clean)
+	classify(classify)
+	analyze_meeting(analyze_meeting)
+	analyze_interview(analyze_interview)
+	analyze_general(analyze_general)
+	format_output(format_output)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> extract_audio;
+	analyze_general --> format_output;
+	analyze_interview --> format_output;
+	analyze_meeting --> format_output;
+	asr_transcribe --> text_clean;
+	classify -.-> analyze_general;
+	classify -.-> analyze_interview;
+	classify -.-> analyze_meeting;
+	extract_audio --> preprocess;
+	preprocess --> asr_transcribe;
+	text_clean --> classify;
+	format_output --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc
