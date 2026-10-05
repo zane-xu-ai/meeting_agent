@@ -245,7 +245,8 @@ async def text_clean(state: AgentState) -> dict:
 
     # 保存 ASR 缓存
     asr_path = save_asr_cache(cleaned_text, state["audio_stem"])
-    _notify(task_id, asr_result_path=str(asr_path), step="转写完成，正在整理...", progress=58)
+    _notify(task_id, asr_result_path=str(asr_path),
+            step="转写完成，正在整理...", progress=58)
     logger.info(f"[任务 {task_id}] 文本预处理完成：{len(cleaned.sentences)} 句")
 
     return {"transcript_text": cleaned_text}
