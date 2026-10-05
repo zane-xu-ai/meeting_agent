@@ -4,7 +4,9 @@
 > **M1 Function Calling 已完成** ✅ (2026-10-05)
 > **M2 多轮对话已完成** ✅ (2026-10-05)
 > **M3 上下文工程已完成** ✅ (2026-10-05)
+> **M4 短期记忆已完成** ✅ (2026-10-05)
 > **Phase 1: Agent 核心能力 全部完成** 🎉
+> **Phase 2: 记忆系统 M4 完成** 🎉
 > 本计划定义从"智能管道"进化为"真正 AI Agent"的后续路线。
 
 ## 当前架构总结
@@ -202,8 +204,22 @@ class AgentState(TypedDict):
 - 滑动窗口：超过 N 轮时，压缩早期对话为摘要
 
 **改动文件**:
-- `agent/memory.py` — **新建**，短期记忆管理
-- `server.py` — 会话状态管理
+- `agent/memory.py` — **新建**，短期记忆管理 ✅
+- `server.py` — 会话状态管理 ✅
+
+**实现内容** (2026-10-05):
+- `ConversationMemory` 类: 单个任务的对话记忆管理
+  - `summary`: 早期对话的压缩摘要
+  - `messages`: 最近的对话历史 (滑动窗口)
+  - `max_rounds`: 保留最近 20 轮对话
+  - `compress_threshold`: 超过 30 轮时触发压缩
+- `MemoryManager` 类: 全局记忆管理器
+  - 线程安全的内存存储 (可扩展到 Redis/DB)
+  - `add_message()`, `get_recent_messages()`, `get_all_messages()`
+  - `needs_compression()`, `compress_early_messages()`, `apply_compression()`
+  - `get_stats()`: 统计信息 (轮数、消息数、摘要长度)
+- server.py: 用 MemoryManager 替代 chat_histories 字典
+- `/api/chat/{task_id}/history`: 返回 messages + summary + stats
 
 ### M5 — 长期记忆 (向量检索)
 

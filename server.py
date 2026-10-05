@@ -22,6 +22,7 @@ from pydantic import BaseModel
 
 from config import settings
 from agent.context import get_context_manager
+from agent.memory import get_memory_manager
 
 # ── 日志配置 ──────────────────────────────────────────────────
 logger.remove()
@@ -120,10 +121,9 @@ class ChatRequest(BaseModel):
 tasks: dict[str, dict] = {}
 tasks_lock = threading.Lock()
 
-# ── Chat History Store ──────────────────────────────────────────
-# 每个 task_id 维护独立的对话历史，用于多轮追问
-chat_histories: dict[str, list[dict]] = {}
-chat_lock = threading.Lock()
+# ── M4: Short-term Memory Store ─────────────────────────────────
+# 使用 MemoryManager 管理对话记忆 (替代原有的 chat_histories 字典)
+# 支持滑动窗口、历史压缩等功能
 
 
 def _new_task_id() -> str:
@@ -464,10 +464,9 @@ async def chat_with_task(task_id: str, req: ChatRequest):
     # 使用 ContextManager 进行 token 级别的上下文管理
     ctx_mgr = get_context_manager()
 
-    # 获取对话历史
-    with chat_lock:
-        history = chat_histories.get(task_id, [])
-        recent_history = history[-20:]  # 最近 10 轮 (每轮 user+assistant)
+    # M4: 使用 MemoryManager 获取对话历史 (基于 token 预算)
+    mem_mgr = get_memory_manager()
+    recent_history = mem_mgr.get_recent_messages(task_id, token_budget=20_000)
 
     # 追加当前用户消息到历史 (用于 token 计算)
     current_messages = recent_history + \
@@ -488,17 +487,22 @@ async def chat_with_task(task_id: str, req: ChatRequest):
         llm = LLMClient()
         reply = await llm.chat_messages(messages, temperature=0.5, max_tokens=2048)
 
-        # 保存对话历史
-        with chat_lock:
-            if task_id not in chat_histories:
-                chat_histories[task_id] = []
-            chat_histories[task_id].append(
-                {"role": "user", "content": user_message})
-            chat_histories[task_id].append(
-                {"role": "assistant", "content": reply})
+        # M4: 保存对话到 MemoryManager
+        mem_mgr.add_message(task_id, "user", user_message)
+        mem_mgr.add_message(task_id, "assistant", reply)
 
-        logger.info(f"[任务 {task_id}] 追问对话: user='{user_message[:50]}...' → "
-                    f"reply={len(reply)} chars")
+        # 检查是否需要压缩 (超过阈值时触发)
+        if mem_mgr.needs_compression(task_id):
+            logger.info(f"[任务 {task_id}] 对话历史超过阈值，建议压缩")
+            # TODO: 实现自动压缩 (调用 LLM 生成摘要)
+
+        stats = mem_mgr.get_stats(task_id)
+        logger.info(
+            f"[任务 {task_id}] 追问对话: user='{user_message[:50]}...' → "
+            f"reply={len(reply)} chars, "
+            f"rounds={stats['rounds']}, messages={stats['messages']}, "
+            f"tokens={stats['tokens']}"
+        )
 
         return {"reply": reply}
 
@@ -509,12 +513,16 @@ async def chat_with_task(task_id: str, req: ChatRequest):
 
 @app.get("/api/chat/{task_id}/history")
 async def get_chat_history(task_id: str):
-    """获取任务的对话历史"""
+    """获取任务的对话历史 (M4: 使用 MemoryManager)"""
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
-    with chat_lock:
-        history = chat_histories.get(task_id, [])
-    return {"messages": history}
+    mem_mgr = get_memory_manager()
+    memory = mem_mgr.get_memory(task_id)
+    return {
+        "messages": memory.messages,
+        "summary": memory.summary,
+        "stats": mem_mgr.get_stats(task_id),
+    }
 
 
 # ── Serve Frontend ───────────────────────────────────────────
