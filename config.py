@@ -57,6 +57,20 @@ class Settings(BaseSettings):
         default=10, description="短句合并阈值，低于此长度的连续同说话人片段会合并"
     )
 
+    # M5: Embedding & Rerank
+    embedding_model: str = Field(
+        default="qwen3.7-text-embedding-flash",
+        description="Embedding 模型名称",
+    )
+    rerank_model: str = Field(
+        default="qwen3.7-text-rerank",
+        description="Rerank 模型名称",
+    )
+    vector_store_dir: Path = Field(
+        default=Path("./data/vector_store"),
+        description="ChromaDB 向量库持久化目录",
+    )
+
     # 输出
     output_dir: Path = Field(default=Path("./output"), description="输出目录")
 

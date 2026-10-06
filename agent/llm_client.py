@@ -256,6 +256,161 @@ class LLMClient:
         )
         return message
 
+    async def chat_stream(
+        self,
+        prompt: str,
+        system: str = "你是一名专业的会议纪要助手，擅长从会议记录中提取关键信息。",
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ):
+        """
+        流式对话输出，逐 token 返回。
+
+        Args:
+            prompt: 用户 prompt
+            system: 系统 prompt
+            temperature: 温度参数
+            max_tokens: 最大输出 token 数
+
+        Yields:
+            str: 每个 token 片段
+        """
+        last_error = None
+        for model in self.models:
+            self.model = model
+            try:
+                async for token in self._chat_stream_with_model(prompt, system, temperature, max_tokens):
+                    yield token
+                return  # 成功完成，退出
+            except Exception as e:
+                last_error = e
+                logger.warning(f"LLM 模型 {model} (stream) 失败: {e}，尝试下一个...")
+                if model != self.models[-1]:
+                    continue
+                raise RuntimeError(
+                    f"所有 LLM 模型 (stream) 均失败。最后一个错误 ({model}): {last_error}"
+                ) from last_error
+
+    async def _chat_stream_with_model(
+        self,
+        prompt: str,
+        system: str,
+        temperature: float,
+        max_tokens: int,
+    ):
+        """使用当前 self.model 执行流式对话"""
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,  # 启用流式输出
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            logger.debug(f"调用 LLM (stream): {self.model}")
+            async with client.stream("POST", self.chat_url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                # 逐行读取 SSE 响应
+                async for line in resp.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        try:
+                            import json
+                            chunk = json.loads(data)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
+
+    async def chat_messages_stream(
+        self,
+        messages: list[dict],
+        temperature: float = 0.3,
+        max_tokens: int = 4096,
+    ):
+        """
+        流式多轮对话输出。
+
+        Args:
+            messages: 完整对话消息列表
+            temperature: 温度参数
+            max_tokens: 最大输出 token 数
+
+        Yields:
+            str: 每个 token 片段
+        """
+        last_error = None
+        for model in self.models:
+            self.model = model
+            try:
+                async for token in self._chat_messages_stream_with_model(messages, temperature, max_tokens):
+                    yield token
+                return
+            except Exception as e:
+                last_error = e
+                logger.warning(f"LLM 模型 {model} (messages stream) 失败: {e}，尝试下一个...")
+                if model != self.models[-1]:
+                    continue
+                raise RuntimeError(
+                    f"所有 LLM 模型 (messages stream) 均失败。最后一个错误 ({model}): {last_error}"
+                ) from last_error
+
+    async def _chat_messages_stream_with_model(
+        self,
+        messages: list[dict],
+        temperature: float,
+        max_tokens: int,
+    ):
+        """使用当前 self.model 执行流式多轮对话"""
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            logger.debug(f"调用 LLM (messages stream): {self.model}, turns={len(messages)}")
+            async with client.stream("POST", self.chat_url, json=payload, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line or line.startswith(":"):
+                        continue
+                    if line.startswith("data: "):
+                        data = line[6:]
+                        if data == "[DONE]":
+                            break
+                        try:
+                            import json
+                            chunk = json.loads(data)
+                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                        except (json.JSONDecodeError, IndexError, KeyError):
+                            continue
+
     async def chat_json(
         self,
         prompt: str,

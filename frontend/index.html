@@ -1339,6 +1339,262 @@
         padding: 20px;
       }
     }
+
+    /* ── Global Chat (跨任务 RAG 对话) ── */
+    .global-chat-btn {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.35);
+      transition: all 0.25s ease;
+      z-index: 100;
+    }
+
+    .global-chat-btn:hover {
+      background: var(--accent-hover);
+      transform: scale(1.08);
+      box-shadow: 0 6px 24px rgba(99, 102, 241, 0.45);
+    }
+
+    .global-chat-btn svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .global-chat-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.4);
+      z-index: 200;
+      opacity: 0;
+      transition: opacity 0.25s ease;
+      pointer-events: none;
+    }
+
+    .global-chat-overlay.open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .global-chat-panel {
+      position: fixed;
+      bottom: 88px;
+      right: 24px;
+      width: 420px;
+      max-height: 600px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+      display: flex;
+      flex-direction: column;
+      z-index: 201;
+      transform: translateY(20px) scale(0.95);
+      opacity: 0;
+      pointer-events: none;
+      transition: all 0.25s ease;
+    }
+
+    .global-chat-panel.open {
+      transform: translateY(0) scale(1);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .gc-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .gc-header-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .gc-header-title svg {
+      width: 18px;
+      height: 18px;
+      color: var(--accent);
+    }
+
+    .gc-header-actions {
+      display: flex;
+      gap: 4px;
+    }
+
+    .gc-header-actions button {
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .gc-header-actions button:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .gc-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 280px;
+      max-height: 400px;
+    }
+
+    .gc-welcome {
+      text-align: center;
+      padding: 30px 20px;
+      color: var(--text-muted);
+    }
+
+    .gc-welcome-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      background: var(--accent-glow);
+      color: var(--accent);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 12px;
+    }
+
+    .gc-welcome-icon svg {
+      width: 24px;
+      height: 24px;
+    }
+
+    .gc-welcome h3 {
+      font-size: 15px;
+      color: var(--text-primary);
+      margin-bottom: 6px;
+    }
+
+    .gc-welcome p {
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .gc-bubble {
+      max-width: 85%;
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 13.5px;
+      line-height: 1.55;
+      word-break: break-word;
+    }
+
+    .gc-bubble.user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+
+    .gc-bubble.assistant {
+      align-self: flex-start;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border-bottom-left-radius: 4px;
+    }
+
+    .gc-bubble.assistant p {
+      margin: 0;
+    }
+
+    .gc-input-area {
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 12px 16px;
+      border-top: 1px solid var(--border);
+    }
+
+    .gc-input-area textarea {
+      flex: 1;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      font-size: 13px;
+      resize: none;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      outline: none;
+      max-height: 80px;
+      min-height: 36px;
+      font-family: inherit;
+      transition: border-color 0.2s;
+    }
+
+    .gc-input-area textarea:focus {
+      border-color: var(--accent);
+    }
+
+    .gc-send-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+
+    .gc-send-btn:hover:not(:disabled) {
+      background: var(--accent-hover);
+    }
+
+    .gc-send-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .gc-send-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    @media (max-width: 480px) {
+      .global-chat-panel {
+        right: 8px;
+        left: 8px;
+        width: auto;
+        bottom: 80px;
+      }
+    }
   </style>
 </head>
 
@@ -1359,7 +1615,7 @@
             <span class="health-dot" :class="apiOk ? 'ok' : 'err'"></span>
             <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
           </div>
-          <span style="font-size:11px;color:var(--text-muted);">v2.1.3</span>
+          <span style="font-size:11px;color:var(--text-muted);">v2.1.5</span>
         </div>
         <button class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">
           <svg v-if="isDark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -1810,6 +2066,80 @@
         开始新分析
       </button>
     </div>
+
+    <!-- Global Chat (跨任务 RAG 对话) -->
+    <button class="global-chat-btn" @click="toggleGlobalChat" title="历史对话">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    </button>
+
+    <div class="global-chat-overlay" :class="{ open: globalChatOpen }" @click="globalChatOpen = false"></div>
+
+    <div class="global-chat-panel" :class="{ open: globalChatOpen }">
+      <div class="gc-header">
+        <div class="gc-header-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          历史记忆搜索
+        </div>
+        <div class="gc-header-actions">
+          <button @click="clearGlobalChat" title="清空对话">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+          </button>
+          <button @click="globalChatOpen = false" title="关闭">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="gc-messages" ref="gcMessagesEl">
+        <div v-if="globalChatMessages.length === 0" class="gc-welcome">
+          <div class="gc-welcome-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+          </div>
+          <h3>历史记忆搜索</h3>
+          <p>无需上传文件，直接搜索和分析过去的会议记录、面试评估、视频总结。<br>试试问：“上次会议讨论了什么？”</p>
+        </div>
+        <template v-for="(msg, i) in globalChatMessages">
+          <div v-if="msg.role === 'user'" class="gc-bubble user">{{ msg.content }}</div>
+          <template v-else>
+            <template v-if="msg.content">
+              <div class="gc-bubble assistant" v-html="renderMd(msg.content)"></div>
+            </template>
+          </template>
+        </template>
+        <div v-if="globalChatLoading" class="gc-bubble assistant" style="opacity:0.6;">
+          <em>搜索中...</em>
+        </div>
+      </div>
+
+      <div class="gc-input-area">
+        <textarea
+          ref="gcInputEl"
+          v-model="globalChatInput"
+          @keydown.enter.exact.prevent="sendGlobalChat"
+          placeholder="搜索历史记录..."
+          rows="1"
+        ></textarea>
+        <button class="gc-send-btn" @click="sendGlobalChat" :disabled="globalChatLoading || !globalChatInput.trim()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13" />
+            <polygon points="22 2 15 22 11 13 2 9 22 2" />
+          </svg>
+        </button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -1839,6 +2169,14 @@
         const chatLoading = ref(false);
         const chatMessagesEl = ref(null);
         const chatInputEl = ref(null);
+
+        // ── Global Chat (跨任务 RAG 对话) ──
+        const globalChatOpen = ref(false);
+        const globalChatMessages = reactive([]);
+        const globalChatInput = ref('');
+        const globalChatLoading = ref(false);
+        const gcMessagesEl = ref(null);
+        const gcInputEl = ref(null);
 
         const meta = reactive({
           source_type: '', asr_model_used: '', llm_model_used: '',
@@ -1968,8 +2306,13 @@
           try {
             const r = await fetch(`${API}/api/upload${qs ? '?' + qs : ''}`, { method: 'POST', body: form });
             if (!r.ok) {
-              const err = await r.json();
-              throw new Error(err.detail || '上传失败');
+              let errMsg = '上传失败';
+              try { const err = await r.json(); errMsg = err.detail || errMsg; } catch {}
+              throw new Error(errMsg);
+            }
+            const ct = r.headers.get('content-type') || '';
+            if (!ct.includes('application/json')) {
+              throw new Error('服务器返回非 JSON 响应，请检查服务状态');
             }
             const d = await r.json();
             task.task_id = d.task_id;
@@ -2008,8 +2351,9 @@
               body: JSON.stringify({ url, asr_model: selectedAsrModel.value || null, llm_model: selectedLlmModel.value || null }),
             });
             if (!r.ok) {
-              const err = await r.json();
-              throw new Error(err.detail || '提交失败');
+              let errMsg = '提交失败';
+              try { const err = await r.json(); errMsg = err.detail || errMsg; } catch {}
+              throw new Error(errMsg);
             }
             const d = await r.json();
             task.task_id = d.task_id;
@@ -2080,10 +2424,68 @@
 
         async function fetchResult() {
           try {
+            // M9: 使用 SSE 流式输出
+            const eventSource = new EventSource(`${API}/api/stream/${task.task_id}`);
+            let fullContent = '';
+            
+            eventSource.onmessage = (event) => {
+              try {
+                const data = JSON.parse(event.data);
+                
+                if (data.type === 'start') {
+                  // 开始流式输出
+                  console.log('[Stream] 开始:', data.data.rec_type);
+                  resultMd.value = '';
+                } else if (data.type === 'token') {
+                  // 增量 token
+                  fullContent += data.data.content;
+                  resultMd.value = fullContent;
+                } else if (data.type === 'done') {
+                  // 完成
+                  eventSource.close();
+                  resultMd.value = data.data.output_text || fullContent;
+                  // Fetch final status for complete metadata
+                  fetch(`${API}/api/status/${task.task_id}`)
+                    .then(r => r.json())
+                    .then(sd => updateMeta(sd))
+                    .catch(() => {});
+                  phase.value = 'done';
+                  stopStepTimer();
+                } else if (data.type === 'error') {
+                  // 错误
+                  eventSource.close();
+                  phase.value = 'error';
+                  task.error = '流式输出错误: ' + data.data.message;
+                } else if (data.type === 'heartbeat') {
+                  // 心跳，忽略
+                  console.debug('[Stream] 心跳');
+                }
+              } catch (e) {
+                console.error('[Stream] 解析事件失败:', e);
+              }
+            };
+            
+            eventSource.onerror = (e) => {
+              console.error('[Stream] 连接错误:', e);
+              eventSource.close();
+              // 降级到传统轮询
+              if (!fullContent) {
+                fetchResultFallback();
+              }
+            };
+          } catch (e) {
+            console.error('[Stream] 初始化失败:', e);
+            // 降级到传统轮询
+            fetchResultFallback();
+          }
+        }
+        
+        // 降级方案: 传统轮询
+        async function fetchResultFallback() {
+          try {
             const r = await fetch(`${API}/api/result/${task.task_id}`);
             const d = await r.json();
             resultMd.value = d.content || '';
-            // Fetch final status for complete metadata
             try {
               const sr = await fetch(`${API}/api/status/${task.task_id}`);
               const sd = await sr.json();
@@ -2154,26 +2556,185 @@
           chatLoading.value = true;
           scrollChatToBottom();
 
+          // M9: 使用 SSE 流式输出
           try {
-            const r = await fetch(`${API}/api/chat/${task.task_id}`, {
+            const response = await fetch(`${API}/api/chat/${task.task_id}/stream`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ message: msg }),
             });
-            if (!r.ok) {
-              const err = await r.json();
+
+            if (!response.ok) {
+              const err = await response.json();
               throw new Error(err.detail || '追问失败');
             }
-            const d = await r.json();
-            chatMessages.push({ role: 'assistant', content: d.reply || '' });
-            scrollChatToBottom();
+
+            // 创建助手消息占位
+            const assistantMsg = { role: 'assistant', content: '' };
+            chatMessages.push(assistantMsg);
+
+            // 读取 SSE 流
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    
+                    if (data.type === 'token') {
+                      assistantMsg.content += data.data.content;
+                      scrollChatToBottom();
+                    } else if (data.type === 'done') {
+                      assistantMsg.content = data.data.reply || assistantMsg.content;
+                    } else if (data.type === 'error') {
+                      assistantMsg.content = '❌ ' + data.data.message;
+                    }
+                  } catch (e) {
+                    console.error('[Chat-Stream] 解析失败:', e);
+                  }
+                }
+              }
+            }
           } catch (e) {
-            chatMessages.push({ role: 'assistant', content: '❌ ' + e.message });
-            scrollChatToBottom();
+            // 降级到非流式
+            try {
+              const r = await fetch(`${API}/api/chat/${task.task_id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg }),
+              });
+              if (!r.ok) {
+                const err = await r.json();
+                throw new Error(err.detail || '追问失败');
+              }
+              const d = await r.json();
+              chatMessages.push({ role: 'assistant', content: d.reply || '' });
+            } catch (err) {
+              chatMessages.push({ role: 'assistant', content: '❌ ' + err.message });
+            }
           } finally {
             chatLoading.value = false;
+            scrollChatToBottom();
             // Focus back on input
             if (chatInputEl.value) chatInputEl.value.focus();
+          }
+        }
+
+        // ── Global Chat ──
+        function scrollGcToBottom() {
+          setTimeout(() => {
+            if (gcMessagesEl.value) {
+              gcMessagesEl.value.scrollTop = gcMessagesEl.value.scrollHeight;
+            }
+          }, 50);
+        }
+
+        function toggleGlobalChat() {
+          globalChatOpen.value = !globalChatOpen.value;
+          if (globalChatOpen.value) {
+            scrollGcToBottom();
+            setTimeout(() => { if (gcInputEl.value) gcInputEl.value.focus(); }, 300);
+          }
+        }
+
+        async function sendGlobalChat() {
+          const msg = globalChatInput.value.trim();
+          if (!msg || globalChatLoading.value) return;
+
+          globalChatMessages.push({ role: 'user', content: msg });
+          globalChatInput.value = '';
+          globalChatLoading.value = true;
+          scrollGcToBottom();
+
+          // M9: 使用 SSE 流式输出
+          try {
+            const response = await fetch(`${API}/api/global-chat/stream`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ message: msg }),
+            });
+
+            if (!response.ok) {
+              const err = await response.json();
+              throw new Error(err.detail || '对话失败');
+            }
+
+            // 创建助手消息占位
+            const assistantMsg = { role: 'assistant', content: '' };
+            globalChatMessages.push(assistantMsg);
+
+            // 读取 SSE 流
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6));
+                    
+                    if (data.type === 'token') {
+                      assistantMsg.content += data.data.content;
+                      scrollGcToBottom();
+                    } else if (data.type === 'done') {
+                      assistantMsg.content = data.data.reply || assistantMsg.content;
+                    } else if (data.type === 'error') {
+                      assistantMsg.content = '❌ ' + data.data.message;
+                    }
+                  } catch (e) {
+                    console.error('[GlobalChat-Stream] 解析失败:', e);
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            // 降级到非流式
+            try {
+              const r = await fetch(`${API}/api/global-chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: msg }),
+              });
+              if (!r.ok) {
+                const err = await r.json();
+                throw new Error(err.detail || '对话失败');
+              }
+              const d = await r.json();
+              globalChatMessages.push({ role: 'assistant', content: d.reply || '' });
+            } catch (err) {
+              globalChatMessages.push({ role: 'assistant', content: '❌ ' + err.message });
+            }
+          } finally {
+            globalChatLoading.value = false;
+            scrollGcToBottom();
+            if (gcInputEl.value) gcInputEl.value.focus();
+          }
+        }
+
+        async function clearGlobalChat() {
+          try {
+            await fetch(`${API}/api/global-chat/history`, { method: 'DELETE' });
+            globalChatMessages.splice(0, globalChatMessages.length);
+          } catch (e) {
+            console.warn('清空对话失败', e);
           }
         }
 
@@ -2257,6 +2818,9 @@
           switchToAsr, downloadAsr, toggleTheme,
           chatMessages, chatInput, chatLoading, chatMessagesEl, chatInputEl,
           sendChat, renderMd,
+          globalChatOpen, globalChatMessages, globalChatInput, globalChatLoading,
+          gcMessagesEl, gcInputEl,
+          toggleGlobalChat, sendGlobalChat, clearGlobalChat,
         };
       }
     }).mount('#app');

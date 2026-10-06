@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>流式输出测试</title>
+</head>
+<body>
+    <h1>流式输出测试</h1>
+    <div id="output" style="border: 1px solid #ccc; padding: 10px; min-height: 200px;"></div>
+    <script>
+        const taskId = '795183ca8b8f';
+        const output = document.getElementById('output');
+        
+        console.log('开始测试流式输出...');
+        
+        const eventSource = new EventSource(`http://localhost:9090/api/stream/${taskId}`);
+        let fullContent = '';
+        
+        eventSource.onmessage = (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                console.log('收到事件:', data);
+                
+                if (data.type === 'start') {
+                    output.innerHTML = '<p>开始流式输出...</p>';
+                } else if (data.type === 'token') {
+                    fullContent += data.data.content;
+                    output.innerHTML = '<pre>' + fullContent + '</pre>';
+                } else if (data.type === 'done') {
+                    fullContent = data.data.output_text || fullContent;
+                    output.innerHTML = '<p>流式输出完成!</p><pre>' + fullContent + '</pre>';
+                    eventSource.close();
+                } else if (data.type === 'error') {
+                    output.innerHTML = '<p style="color: red;">错误: ' + data.data.message + '</p>';
+                    eventSource.close();
+                }
+            } catch (e) {
+                console.error('解析事件失败:', e);
+                output.innerHTML = '<p style="color: red;">解析错误: ' + e.message + '</p>';
+            }
+        };
+        
+        eventSource.onerror = (e) => {
+            console.error('连接错误:', e);
+            output.innerHTML = '<p style="color: red;">连接错误，请检查控制台</p>';
+            eventSource.close();
+        };
+        
+        eventSource.onopen = () => {
+            console.log('EventSource 连接成功');
+            output.innerHTML = '<p>连接成功，等待数据...</p>';
+        };
+    </script>
+</body>
+</html>

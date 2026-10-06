@@ -69,13 +69,34 @@ class AgentState(TypedDict):
 
 
 # ═══════════════════════════════════════════════════════════════
-# 进度回调 & 结果处理 注册表
+# 进度回调 & 结果处理 & 流式输出 注册表
 # ═══════════════════════════════════════════════════════════════
 # 避免在 LangGraph state 中存储不可序列化的 callable，
 # 改为通过 task_id 查找注册的外部回调函数。
 
 _progress_registry: dict[str, Callable] = {}
 _result_handler_registry: dict[str, Callable] = {}
+# M9: 流式输出事件队列 (task_id -> asyncio.Queue)
+_stream_queue_registry: dict[str, asyncio.Queue] = {}
+
+
+def register_stream_queue(task_id: str, queue: asyncio.Queue):
+    """注册流式输出事件队列"""
+    _stream_queue_registry[task_id] = queue
+    logger.debug(f"[Stream] 注册队列: task={task_id}")
+
+
+def unregister_stream_queue(task_id: str):
+    """注销流式输出事件队列"""
+    _stream_queue_registry.pop(task_id, None)
+    logger.debug(f"[Stream] 注销队列: task={task_id}")
+
+
+async def _push_stream_event(task_id: str, event_type: str, data: dict):
+    """推送流式事件到队列 (如果已注册)"""
+    queue = _stream_queue_registry.get(task_id)
+    if queue:
+        await queue.put({"type": event_type, "data": data})
 
 
 def register_progress_cb(task_id: str, cb: Callable) -> None:
@@ -219,14 +240,48 @@ async def asr_transcribe(state: AgentState) -> dict:
     """节点: ASR 语音转写"""
     task_id = state["task_id"]
     asr_input = state["asr_input"]
+    audio_stem = state["audio_stem"]
 
     logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
 
     from agent.asr_client import ASRClient
+    from agent.cache import load_asr_cache
 
     asr = ASRClient(models=[state["asr_model"]]
                     if state.get("asr_model") else None)
     asr_model = asr.model
+
+    # 检查 ASR 缓存
+    cached_text = load_asr_cache(audio_stem, asr_model)
+    if cached_text is not None:
+        logger.info(f"[任务 {task_id}] ASR 缓存命中，跳过转写")
+        # 解析缓存的格式化文本为 Sentence 对象
+        from models.schemas import Transcript, Sentence
+        import re
+        sentences = []
+        for line in cached_text.split('\n'):
+            if not line.strip():
+                continue
+            # 解析格式: [start -> end] speaker: text
+            match = re.match(r'\[([^\]]+)\]\s*([^:]+):\s*(.*)', line)
+            if match:
+                time_range, speaker, text = match.groups()
+                # 简单解析时间（缓存中不需要精确时间）
+                sentences.append(Sentence(text=text.strip(), speaker=speaker.strip()))
+            else:
+                # 如果格式不匹配，直接作为纯文本
+                sentences.append(Sentence(text=line.strip(), speaker=None))
+        cached_transcript = Transcript(sentences=sentences, duration_ms=0)
+        _notify(task_id, step="ASR 缓存命中", progress=55,
+                asr_model_used=asr_model, step_idx=2,
+                asr_sentences=len(sentences),
+                asr_duration=0.0)
+        return {
+            "transcript": cached_transcript,
+            "transcript_text": cached_text,
+            "asr_duration": 0.0,
+        }
+
     _notify(task_id, step="正在语音转写...", progress=40,
             asr_model_used=asr_model, step_idx=2)
 
@@ -693,18 +748,50 @@ async def _fallback_analyze(
 
     # ── 会议 ──
     if rec_type == "meeting":
+        from agent.cache import load_summary_cache, save_summary_cache
         from agent.llm_client import LLMClient
         from agent.prompts import MEETING_ANALYSIS_PROMPT
         from agent.pipeline import format_markdown
-        from agent.cache import save_summary_cache
         from models.schemas import MeetingResult
+
+        # 检查 Summary 缓存
+        cached = load_summary_cache(audio_stem, rec_type=rec_type)
+        if cached is not None:
+            logger.info(f"[任务 {task_id}] 使用 Summary 缓存")
+            # 流式输出缓存内容
+            await _push_stream_event(task_id, "start", {"rec_type": rec_type})
+            for char in cached:
+                await _push_stream_event(task_id, "token", {"content": char})
+            await _push_stream_event(task_id, "done", {"output_text": cached})
+            _notify(task_id, step="会议分析完成 (缓存)", progress=90,
+                    step_idx=5, cache_hit=True, llm_duration=0.0)
+            return {"output_text": cached}
 
         llm = LLMClient(models=[llm_model] if llm_model else None)
         prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
-        data = await llm.chat_json(prompt)
-        result = MeetingResult.model_validate(data)
-        output_text = format_markdown(
-            result, event_time=None, timing_info=timing_info)
+        
+        # M9: 检查是否启用流式输出
+        has_stream_queue = task_id in _stream_queue_registry
+        if has_stream_queue:
+            await _push_stream_event(task_id, "start", {"rec_type": rec_type})
+            # 流式调用 LLM
+            full_content = ""
+            async for token in llm.chat_stream(prompt):
+                full_content += token
+                await _push_stream_event(task_id, "token", {"content": token})
+            # 解析 JSON 并格式化
+            data = llm._extract_json(full_content)
+            result = MeetingResult.model_validate(data)
+            output_text = format_markdown(
+                result, event_time=None, timing_info=timing_info)
+            await _push_stream_event(task_id, "done", {"output_text": output_text})
+        else:
+            # 传统非流式调用
+            data = await llm.chat_json(prompt)
+            result = MeetingResult.model_validate(data)
+            output_text = format_markdown(
+                result, event_time=None, timing_info=timing_info)
+        
         save_summary_cache(output_text, audio_stem, rec_type="meeting")
         llm_dur = time.time() - llm_start
         _notify(task_id, step="会议分析完成", progress=90,
@@ -745,11 +832,37 @@ async def _fallback_analyze(
     if cached is not None:
         output_text = cached
         logger.info(f"[任务 {task_id}] 使用 Summary 缓存")
+        # 流式输出缓存内容
+        await _push_stream_event(task_id, "start", {"rec_type": rec_type})
+        for char in cached:
+            await _push_stream_event(task_id, "token", {"content": char})
+        await _push_stream_event(task_id, "done", {"output_text": cached})
         _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
                 step_idx=5, cache_hit=True, llm_duration=0)
     else:
-        data = await analyze_general(transcript_text, llm_model=llm_model)
-        output_text = format_general_result(data, None, timing_info)
+        # M9: 检查是否启用流式输出
+        has_stream_queue = task_id in _stream_queue_registry
+        if has_stream_queue:
+            from agent.llm_client import LLMClient
+            from agent.prompts import GENERAL_ANALYSIS_PROMPT
+            
+            await _push_stream_event(task_id, "start", {"rec_type": rec_type})
+            llm = LLMClient(models=[llm_model] if llm_model else None)
+            prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
+            # 流式调用 LLM
+            full_content = ""
+            async for token in llm.chat_stream(prompt):
+                full_content += token
+                await _push_stream_event(task_id, "token", {"content": token})
+            # 解析 JSON 并格式化
+            data = llm._extract_json(full_content)
+            output_text = format_general_result(data, None, timing_info)
+            await _push_stream_event(task_id, "done", {"output_text": output_text})
+        else:
+            # 传统非流式调用
+            data = await analyze_general(transcript_text, llm_model=llm_model)
+            output_text = format_general_result(data, None, timing_info)
+        
         save_summary_cache(output_text, audio_stem, rec_type=rec_type)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="通用分析完成", progress=90,

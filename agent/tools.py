@@ -115,6 +115,41 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_past_meetings",
+            "description": (
+                "搜索历史会议/面试/视频记录。"
+                "当用户提到'上次'、'之前'、'历史'、'对比'、'其他会议'时调用。"
+                "返回相关历史记录的摘要和关键信息。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜索查询 (如: 'AI 项目讨论')",
+                    },
+                    "source_type": {
+                        "type": "string",
+                        "enum": ["summary", "asr", "any"],
+                        "description": "搜索来源类型 (默认 any)",
+                    },
+                    "rec_type": {
+                        "type": "string",
+                        "enum": ["meeting", "interview", "general", "any"],
+                        "description": "录音类型过滤 (默认 any)",
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "description": "返回数量 (默认 5)",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]
 
 
@@ -250,4 +285,5 @@ TOOL_REGISTRY: dict[str, Callable] = {
     "analyze_meeting": _tool_analyze_meeting,
     "analyze_interview": _tool_analyze_interview,
     "analyze_general": _tool_analyze_general,
+    "search_past_meetings": None,  # 由 chat 接口直接调用，非 agent_loop
 }
