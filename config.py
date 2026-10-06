@@ -71,6 +71,38 @@ class Settings(BaseSettings):
         description="ChromaDB 向量库持久化目录",
     )
 
+    # M10: 多用户配额
+    daily_task_limit: int = Field(
+        default=5,
+        description="每用户每天的任务数量限制"
+    )
+    quota_whitelist_ips: List[str] = Field(
+        default_factory=list,
+        description="配额白名单 IP 列表，这些 IP 不限制"
+    )
+    quota_data_dir: Path = Field(
+        default=Path("./data"),
+        description="配额数据存储目录"
+    )
+
+    # M11: LangSmith 可观测性
+    langsmith_api_key: str = Field(
+        default="",
+        description="LangSmith API Key，用于全链路追踪"
+    )
+    langchain_project: str = Field(
+        default="meeting_agent",
+        description="LangChain 项目名称 (LangSmith 中显示)"
+    )
+    langchain_tracing_v2: bool = Field(
+        default=False,
+        description="是否启用 LangChain Tracing V2"
+    )
+    langsmith_endpoint: str = Field(
+        default="https://api.smith.langchain.com",
+        description="LangSmith API 端点"
+    )
+
     # 输出
     output_dir: Path = Field(default=Path("./output"), description="输出目录")
 

@@ -363,19 +363,22 @@ mcp_meeting_agent/
 
 ### M11 — 可观测性 (Tracing)
 
+> 详细实施计划见 [`p06_M11_可观测性.md`](./p06_M11_可观测性.md)
+
 **目标**: 全链路追踪，方便调试和优化。
 
-**技术选型**: LangSmith (LangChain 官方) 或 OpenTelemetry
+**技术选型**: LangSmith (LangChain 官方)
 
 **实现**:
 - 每个节点自动记录: 输入/输出、耗时、token 用量
 - 可视化: 执行轨迹图、耗时分布
-- 告警: 异常耗时自动标记
+- 配置: 通过环境变量启用/禁用
 
 **改动文件**:
-- `agent/tracing.py` — **新建**
-- `agent/graph.py` — 集成 tracing callbacks
-- `requirements.txt` — 添加 `langsmith` 或 `opentelemetry-sdk`
+- `agent/tracing.py` — **新建**，LangSmith 初始化 ✅
+- `config.py` — 添加 LangSmith 配置项 ✅
+- `agent/graph.py` — 导入 tracing 模块 ✅
+- `requirements.txt` — 添加 `langsmith` ✅
 
 ### M12 — 评估框架 (Eval)
 

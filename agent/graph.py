@@ -27,6 +27,9 @@ from loguru import logger
 from config import settings
 from agent.context import get_context_manager
 
+# M11: LangSmith 可观测性 (模块加载时自动初始化)
+import agent.tracing  # noqa: F401
+
 
 # ═══════════════════════════════════════════════════════════════
 # State 定义

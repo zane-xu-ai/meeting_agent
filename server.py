@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from loguru import logger
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,6 +25,7 @@ from pydantic import BaseModel
 from config import settings
 from agent.context import get_context_manager
 from agent.memory import get_memory_manager
+from agent.quota import QuotaManager
 
 # M5: 长期记忆 (向量检索)
 from agent.embedding import get_embedding_client
@@ -72,6 +73,21 @@ app.add_middleware(
 UPLOAD_DIR = Path("./uploads")
 RESULT_DIR = settings.output_dir / "summary"
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+# ── M10: 多用户配额管理器 ──────────────────────────────────────
+quota_manager = QuotaManager(
+    data_dir=settings.quota_data_dir,
+    daily_limit=settings.daily_task_limit,
+    whitelist=set(settings.quota_whitelist_ips),
+)
+
+
+def get_client_ip(request: Request) -> str:
+    """获取客户端真实 IP（支持反向代理）"""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host
 
 # ── Models ───────────────────────────────────────────────────
 
@@ -358,11 +374,26 @@ VIDEO_DOMAINS = {
 
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload_file(
+    request: Request,
     file: UploadFile = File(...),
     asr_model: str | None = None,
     llm_model: str | None = None,
 ):
     """上传音视频文件，创建后台处理任务"""
+    # M10: 配额检查
+    client_ip = get_client_ip(request)
+    allowed, quota_info = quota_manager.check_quota(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": f"今日任务数量已达上限 ({quota_info['used']}/{quota_info['limit']})，明天再试吧！",
+                "used": quota_info["used"],
+                "limit": quota_info["limit"],
+                "reset_time": "明天 00:00",
+            }
+        )
+
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(
@@ -395,6 +426,9 @@ async def upload_file(
             "file_size": len(content),
         }
 
+    # M10: 记录配额使用
+    quota_manager.record_usage(client_ip, task_id)
+
     threading.Thread(
         target=_process,
         args=(task_id, str(file_path), source_type, file.filename or "",
@@ -406,8 +440,22 @@ async def upload_file(
 
 
 @app.post("/api/submit-url")
-async def submit_url(req: UrlRequest):
+async def submit_url(request: Request, req: UrlRequest):
     """提交音视频链接进行分析"""
+    # M10: 配额检查
+    client_ip = get_client_ip(request)
+    allowed, quota_info = quota_manager.check_quota(client_ip)
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": f"今日任务数量已达上限 ({quota_info['used']}/{quota_info['limit']})，明天再试吧！",
+                "used": quota_info["used"],
+                "limit": quota_info["limit"],
+                "reset_time": "明天 00:00",
+            }
+        )
+
     url = req.url.strip()
     if not url:
         raise HTTPException(400, "请输入有效的音视频链接")
@@ -448,6 +496,9 @@ async def submit_url(req: UrlRequest):
             "file_size": 0,
         }
 
+    # M10: 记录配额使用
+    quota_manager.record_usage(client_ip, task_id)
+
     threading.Thread(
         target=_process,
         args=(task_id, url, source_type, display_name,
@@ -464,6 +515,25 @@ async def get_status(task_id: str):
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
     return tasks[task_id]
+
+
+# ═══════════════════════════════════════════════════════════════
+# M10: 多用户配额管理
+# ═══════════════════════════════════════════════════════════════
+
+
+@app.get("/api/quota")
+async def get_quota(request: Request):
+    """查询当前用户的配额使用情况"""
+    client_ip = get_client_ip(request)
+    info = quota_manager.get_usage_stats(client_ip)
+    return {
+        "ip": client_ip,
+        "used": info["used"],
+        "limit": info["limit"],
+        "remaining": info["remaining"],
+        "is_whitelisted": info["is_whitelisted"],
+    }
 
 
 # ═══════════════════════════════════════════════════════════════
