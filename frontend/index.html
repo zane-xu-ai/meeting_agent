@@ -2069,7 +2069,8 @@
 
     <!-- Global Chat (跨任务 RAG 对话) -->
     <button class="global-chat-btn" @click="toggleGlobalChat" title="历史对话">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+        stroke-linejoin="round">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     </button>
@@ -2079,7 +2080,8 @@
     <div class="global-chat-panel" :class="{ open: globalChatOpen }">
       <div class="gc-header">
         <div class="gc-header-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round">
             <circle cx="11" cy="11" r="8" />
             <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
@@ -2087,13 +2089,15 @@
         </div>
         <div class="gc-header-actions">
           <button @click="clearGlobalChat" title="清空对话">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
               <polyline points="3 6 5 6 21 6" />
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
             </svg>
           </button>
           <button @click="globalChatOpen = false" title="关闭">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
               <line x1="18" y1="6" x2="6" y2="18" />
               <line x1="6" y1="6" x2="18" y2="18" />
             </svg>
@@ -2104,7 +2108,8 @@
       <div class="gc-messages" ref="gcMessagesEl">
         <div v-if="globalChatMessages.length === 0" class="gc-welcome">
           <div class="gc-welcome-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+              stroke-linejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
             </svg>
           </div>
@@ -2125,15 +2130,11 @@
       </div>
 
       <div class="gc-input-area">
-        <textarea
-          ref="gcInputEl"
-          v-model="globalChatInput"
-          @keydown.enter.exact.prevent="sendGlobalChat"
-          placeholder="搜索历史记录..."
-          rows="1"
-        ></textarea>
+        <textarea ref="gcInputEl" v-model="globalChatInput" @keydown.enter.exact.prevent="sendGlobalChat"
+          placeholder="搜索历史记录..." rows="1"></textarea>
         <button class="gc-send-btn" @click="sendGlobalChat" :disabled="globalChatLoading || !globalChatInput.trim()">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+            stroke-linejoin="round">
             <line x1="22" y1="2" x2="11" y2="13" />
             <polygon points="22 2 15 22 11 13 2 9 22 2" />
           </svg>
@@ -2307,7 +2308,7 @@
             const r = await fetch(`${API}/api/upload${qs ? '?' + qs : ''}`, { method: 'POST', body: form });
             if (!r.ok) {
               let errMsg = '上传失败';
-              try { const err = await r.json(); errMsg = err.detail || errMsg; } catch {}
+              try { const err = await r.json(); errMsg = err.detail || errMsg; } catch { }
               throw new Error(errMsg);
             }
             const ct = r.headers.get('content-type') || '';
@@ -2352,7 +2353,7 @@
             });
             if (!r.ok) {
               let errMsg = '提交失败';
-              try { const err = await r.json(); errMsg = err.detail || errMsg; } catch {}
+              try { const err = await r.json(); errMsg = err.detail || errMsg; } catch { }
               throw new Error(errMsg);
             }
             const d = await r.json();
@@ -2427,11 +2428,11 @@
             // M9: 使用 SSE 流式输出
             const eventSource = new EventSource(`${API}/api/stream/${task.task_id}`);
             let fullContent = '';
-            
+
             eventSource.onmessage = (event) => {
               try {
                 const data = JSON.parse(event.data);
-                
+
                 if (data.type === 'start') {
                   // 开始流式输出
                   console.log('[Stream] 开始:', data.data.rec_type);
@@ -2448,7 +2449,7 @@
                   fetch(`${API}/api/status/${task.task_id}`)
                     .then(r => r.json())
                     .then(sd => updateMeta(sd))
-                    .catch(() => {});
+                    .catch(() => { });
                   phase.value = 'done';
                   stopStepTimer();
                 } else if (data.type === 'error') {
@@ -2464,7 +2465,7 @@
                 console.error('[Stream] 解析事件失败:', e);
               }
             };
-            
+
             eventSource.onerror = (e) => {
               console.error('[Stream] 连接错误:', e);
               eventSource.close();
@@ -2479,7 +2480,7 @@
             fetchResultFallback();
           }
         }
-        
+
         // 降级方案: 传统轮询
         async function fetchResultFallback() {
           try {
@@ -2590,7 +2591,7 @@
                 if (line.startsWith('data: ')) {
                   try {
                     const data = JSON.parse(line.slice(6));
-                    
+
                     if (data.type === 'token') {
                       assistantMsg.content += data.data.content;
                       scrollChatToBottom();
@@ -2690,7 +2691,7 @@
                 if (line.startsWith('data: ')) {
                   try {
                     const data = JSON.parse(line.slice(6));
-                    
+
                     if (data.type === 'token') {
                       assistantMsg.content += data.data.content;
                       scrollGcToBottom();

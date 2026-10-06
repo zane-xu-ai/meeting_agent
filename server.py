@@ -324,10 +324,12 @@ def _process(task_id: str, source: str, source_type: str,
         # M5: 后台线程索引到向量库 (独立线程 + 独立 event loop)
         import threading
         task_data = dict(tasks.get(task_id, {}))
+
         def _run_index():
             import asyncio
             asyncio.run(_index_task_to_vector_store(task_id, task_data))
-        threading.Thread(target=_run_index, daemon=True, name=f"index-{task_id}").start()
+        threading.Thread(target=_run_index, daemon=True,
+                         name=f"index-{task_id}").start()
 
     except Exception as e:
         logger.error(f"[任务 {task_id}] 处理失败: {e}", exc_info=True)
@@ -483,20 +485,20 @@ async def stream_task_output(task_id: str):
     """
     if task_id not in tasks:
         raise HTTPException(404, "任务不存在")
-    
+
     task = tasks[task_id]
-    
+
     # 如果任务已完成，直接返回 SSE 格式的完成事件
     if task["status"] == "completed":
         result_path = task.get("result_path")
         if result_path and Path(result_path).exists():
             content = Path(result_path).read_text(encoding="utf-8")
-            
+
             async def completed_stream():
                 # 直接发送完成事件，不模拟流式
                 yield f"data: {json.dumps({'type': 'start', 'data': {'rec_type': task.get('rec_type', 'general')}})}\n\n"
                 yield f"data: {json.dumps({'type': 'done', 'data': {'output_text': content}})}\n\n"
-            
+
             return StreamingResponse(
                 completed_stream(),
                 media_type="text/event-stream",
@@ -506,41 +508,42 @@ async def stream_task_output(task_id: str):
                     "X-Accel-Buffering": "no",
                 }
             )
-    
+
     # 任务未完成或正在进行，创建流式队列
     import asyncio
     from agent.graph import register_stream_queue, unregister_stream_queue
-    
+
     queue = asyncio.Queue()
     register_stream_queue(task_id, queue)
-    
+
     async def event_generator():
         try:
             last_heartbeat = time.time()
-            
+
             while True:
                 try:
                     # 等待事件，超时 15 秒发心跳
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
                     yield f"data: {json.dumps(event)}\n\n"
-                    
+
                     # 如果收到 done 或 error 事件，结束流
                     if event["type"] in ("done", "error"):
                         break
                 except asyncio.TimeoutError:
                     # 发送心跳保持连接
                     yield f"data: {json.dumps({'type': 'heartbeat', 'data': {'time': time.time()}})}\n\n"
-                    
+
                     # 检查任务是否已完成
                     if tasks.get(task_id, {}).get("status") == "completed":
                         result_path = tasks[task_id].get("result_path")
                         if result_path and Path(result_path).exists():
-                            content = Path(result_path).read_text(encoding="utf-8")
+                            content = Path(result_path).read_text(
+                                encoding="utf-8")
                             yield f"data: {json.dumps({'type': 'done', 'data': {'output_text': content}})}\n\n"
                             break
         finally:
             unregister_stream_queue(task_id)
-    
+
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
@@ -782,7 +785,7 @@ async def chat_with_task(task_id: str, req: ChatRequest):
         from agent.llm_client import LLMClient
         llm = LLMClient()
         reply = await llm.chat_messages(messages, temperature=0.5, max_tokens=4096)
-        
+
         # 检查空回复
         if not reply or not reply.strip():
             logger.warning(f"[任务 {task_id}] LLM 返回空回复")
@@ -864,7 +867,8 @@ async def chat_stream(task_id: str, req: ChatRequest):
                     source_label = f"[{r.source_type}/{r.section}]"
                     rag_parts.append(f"{source_label} {r.parent_content}")
                 rag_context = "\n\n".join(rag_parts)
-                logger.info(f"[任务 {task_id}-Stream] 检索到 {len(rag_results)} 条历史记录")
+                logger.info(
+                    f"[任务 {task_id}-Stream] 检索到 {len(rag_results)} 条历史记录")
         except Exception as e:
             logger.warning(f"[任务 {task_id}-Stream] RAG 检索失败: {e}")
 
@@ -872,7 +876,8 @@ async def chat_stream(task_id: str, req: ChatRequest):
     ctx_mgr = get_context_manager()
     mem_mgr = get_memory_manager()
     recent_history = mem_mgr.get_recent_messages(task_id, token_budget=20_000)
-    current_messages = recent_history + [{"role": "user", "content": user_message}]
+    current_messages = recent_history + \
+        [{"role": "user", "content": user_message}]
 
     # 构建完整上下文
     system_prompt = CHAT_SYSTEM_PROMPT
@@ -891,26 +896,26 @@ async def chat_stream(task_id: str, req: ChatRequest):
         try:
             from agent.llm_client import LLMClient
             llm = LLMClient()
-            
+
             # 发送开始事件
             yield f"data: {json.dumps({'type': 'start'})}\n\n"
-            
+
             # 流式调用 LLM
             full_content = ""
             async for token in llm.chat_messages_stream(messages, temperature=0.5, max_tokens=4096):
                 full_content += token
                 yield f"data: {json.dumps({'type': 'token', 'data': {'content': token}})}\n\n"
-            
+
             # 检查空回复
             if not full_content or not full_content.strip():
                 logger.warning(f"[任务 {task_id}-Stream] LLM 返回空回复")
                 full_content = "抱歉，我暂时无法回答这个问题。请稍后重试，或者尝试换一种提问方式。"
                 yield f"data: {json.dumps({'type': 'token', 'data': {'content': full_content}})}\n\n"
-            
+
             # 保存对话历史
             mem_mgr.add_message(task_id, "user", user_message)
             mem_mgr.add_message(task_id, "assistant", full_content)
-            
+
             # L2: 高低水位线检查
             if mem_mgr.needs_compression(task_id):
                 memory = mem_mgr.get_memory(task_id)
@@ -923,10 +928,10 @@ async def chat_stream(task_id: str, req: ChatRequest):
                     auto_summary = "早期对话摘要: " + "; ".join(summary_parts)
                     mem_mgr.compress(task_id, auto_summary)
                     logger.info(f"[任务 {task_id}-Stream] L2 压缩已执行")
-            
+
             # 发送完成事件
             yield f"data: {json.dumps({'type': 'done', 'data': {'reply': full_content}})}\n\n"
-            
+
             stats = mem_mgr.get_stats(task_id)
             logger.info(
                 f"[任务 {task_id}-Stream] 追问对话完成: "
@@ -1080,7 +1085,7 @@ async def global_chat(req: GlobalChatRequest):
         from agent.llm_client import LLMClient
         llm = LLMClient()
         reply = await llm.chat_messages(messages, temperature=0.5, max_tokens=4096)
-        
+
         # 检查空回复
         if not reply or not reply.strip():
             logger.warning(f"[任务 {task_id}] LLM 返回空回复")
@@ -1119,7 +1124,8 @@ async def global_chat_stream(req: GlobalChatRequest):
     if not user_message:
         raise HTTPException(400, "消息不能为空")
 
-    logger.info(f"[GlobalChat-Stream] session={session_id}: user='{user_message[:60]}'")
+    logger.info(
+        f"[GlobalChat-Stream] session={session_id}: user='{user_message[:60]}'")
 
     # 获取/初始化会话历史
     if session_id not in _global_chat_histories:
@@ -1156,33 +1162,33 @@ async def global_chat_stream(req: GlobalChatRequest):
         try:
             from agent.llm_client import LLMClient
             llm = LLMClient()
-            
+
             # 发送开始事件
             yield f"data: {json.dumps({'type': 'start'})}\n\n"
-            
+
             # 流式调用 LLM
             full_content = ""
             async for token in llm.chat_messages_stream(messages, temperature=0.5, max_tokens=4096):
                 full_content += token
                 yield f"data: {json.dumps({'type': 'token', 'data': {'content': token}})}\n\n"
-            
+
             # 检查空回复
             if not full_content or not full_content.strip():
                 logger.warning(f"[GlobalChat-Stream] LLM 返回空回复")
                 full_content = "抱歉，我暂时无法回答这个问题。请稍后重试，或者尝试换一种提问方式。"
                 yield f"data: {json.dumps({'type': 'token', 'data': {'content': full_content}})}\n\n"
-            
+
             # 保存历史
             history.append({"role": "user", "content": user_message})
             history.append({"role": "assistant", "content": full_content})
-            
+
             # 限制历史长度
             if len(history) > 40:
                 _global_chat_histories[session_id] = history[-40:]
-            
+
             # 发送完成事件
             yield f"data: {json.dumps({'type': 'done', 'data': {'reply': full_content}})}\n\n"
-            
+
             logger.info(
                 f"[GlobalChat-Stream] session={session_id}: "
                 f"reply={len(full_content)} chars, history={len(_global_chat_histories[session_id])} msgs"

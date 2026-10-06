@@ -267,7 +267,8 @@ async def asr_transcribe(state: AgentState) -> dict:
             if match:
                 time_range, speaker, text = match.groups()
                 # 简单解析时间（缓存中不需要精确时间）
-                sentences.append(Sentence(text=text.strip(), speaker=speaker.strip()))
+                sentences.append(
+                    Sentence(text=text.strip(), speaker=speaker.strip()))
             else:
                 # 如果格式不匹配，直接作为纯文本
                 sentences.append(Sentence(text=line.strip(), speaker=None))
@@ -769,7 +770,7 @@ async def _fallback_analyze(
 
         llm = LLMClient(models=[llm_model] if llm_model else None)
         prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
-        
+
         # M9: 检查是否启用流式输出
         has_stream_queue = task_id in _stream_queue_registry
         if has_stream_queue:
@@ -791,7 +792,7 @@ async def _fallback_analyze(
             result = MeetingResult.model_validate(data)
             output_text = format_markdown(
                 result, event_time=None, timing_info=timing_info)
-        
+
         save_summary_cache(output_text, audio_stem, rec_type="meeting")
         llm_dur = time.time() - llm_start
         _notify(task_id, step="会议分析完成", progress=90,
@@ -845,7 +846,7 @@ async def _fallback_analyze(
         if has_stream_queue:
             from agent.llm_client import LLMClient
             from agent.prompts import GENERAL_ANALYSIS_PROMPT
-            
+
             await _push_stream_event(task_id, "start", {"rec_type": rec_type})
             llm = LLMClient(models=[llm_model] if llm_model else None)
             prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
@@ -862,7 +863,7 @@ async def _fallback_analyze(
             # 传统非流式调用
             data = await analyze_general(transcript_text, llm_model=llm_model)
             output_text = format_general_result(data, None, timing_info)
-        
+
         save_summary_cache(output_text, audio_stem, rec_type=rec_type)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="通用分析完成", progress=90,

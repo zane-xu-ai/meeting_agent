@@ -143,9 +143,9 @@ class VectorStore:
         batch_size = 100
         for i in range(0, len(parent_ids), batch_size):
             self.parent_col.add(
-                ids=parent_ids[i : i + batch_size],
-                documents=parent_docs[i : i + batch_size],
-                metadatas=parent_metas[i : i + batch_size],
+                ids=parent_ids[i: i + batch_size],
+                documents=parent_docs[i: i + batch_size],
+                metadatas=parent_metas[i: i + batch_size],
             )
 
         logger.debug(
@@ -174,10 +174,10 @@ class VectorStore:
 
         for i in range(0, len(child_ids), batch_size):
             self.child_col.add(
-                ids=child_ids[i : i + batch_size],
-                documents=child_docs[i : i + batch_size],
-                metadatas=child_metas[i : i + batch_size],
-                embeddings=child_embs[i : i + batch_size],
+                ids=child_ids[i: i + batch_size],
+                documents=child_docs[i: i + batch_size],
+                metadatas=child_metas[i: i + batch_size],
+                embeddings=child_embs[i: i + batch_size],
             )
 
         logger.info(
@@ -297,7 +297,8 @@ class VectorStore:
         if not rerank_results:
             logger.warning("[VectorStore] Rerank 无结果，使用粗检索结果")
             rerank_results = [
-                type('obj', (object,), {'index': i, 'content': doc, 'score': score})
+                type('obj', (object,), {'index': i,
+                     'content': doc, 'score': score})
                 for i, (doc, _, score) in enumerate(coarse_hits[:final_top_k])
             ]
 
@@ -313,7 +314,8 @@ class VectorStore:
 
             # 取回父块
             parent_meta = await self.get_parent(parent_id)
-            parent_content = parent_meta.get("content", "") if parent_meta else ""
+            parent_content = parent_meta.get(
+                "content", "") if parent_meta else ""
 
             result = SearchResult(
                 child_content=child_content,

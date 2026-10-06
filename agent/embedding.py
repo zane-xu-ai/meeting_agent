@@ -75,7 +75,7 @@ class EmbeddingClient:
         n_batches = (len(texts) + batch_size - 1) // batch_size
 
         for i in range(0, len(texts), batch_size):
-            batch = texts[i : i + batch_size]
+            batch = texts[i: i + batch_size]
             batch_idx = i // batch_size + 1
 
             logger.debug(

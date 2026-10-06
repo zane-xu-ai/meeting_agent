@@ -330,7 +330,8 @@ class LLMClient:
                         try:
                             import json
                             chunk = json.loads(data)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            delta = chunk.get("choices", [{}])[
+                                0].get("delta", {})
                             content = delta.get("content", "")
                             if content:
                                 yield content
@@ -363,7 +364,8 @@ class LLMClient:
                 return
             except Exception as e:
                 last_error = e
-                logger.warning(f"LLM 模型 {model} (messages stream) 失败: {e}，尝试下一个...")
+                logger.warning(
+                    f"LLM 模型 {model} (messages stream) 失败: {e}，尝试下一个...")
                 if model != self.models[-1]:
                     continue
                 raise RuntimeError(
@@ -391,7 +393,8 @@ class LLMClient:
         }
 
         async with httpx.AsyncClient(timeout=120.0) as client:
-            logger.debug(f"调用 LLM (messages stream): {self.model}, turns={len(messages)}")
+            logger.debug(
+                f"调用 LLM (messages stream): {self.model}, turns={len(messages)}")
             async with client.stream("POST", self.chat_url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
@@ -404,7 +407,8 @@ class LLMClient:
                         try:
                             import json
                             chunk = json.loads(data)
-                            delta = chunk.get("choices", [{}])[0].get("delta", {})
+                            delta = chunk.get("choices", [{}])[
+                                0].get("delta", {})
                             content = delta.get("content", "")
                             if content:
                                 yield content
