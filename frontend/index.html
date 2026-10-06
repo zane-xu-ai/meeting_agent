@@ -1616,8 +1616,10 @@
             <span class="health-text">{{ apiOk ? '服务就绪' : '未连接' }}</span>
           </div>
           <span style="font-size:11px;color:var(--text-muted);">v2.1.5</span>
-          <span v-if="quotaInfo.loaded" style="font-size:11px;color:var(--text-muted);" :title="quotaInfo.is_whitelisted ? '白名单用户，不限次数' : '今日剩余任务次数'">
-            今日: <span v-if="quotaInfo.is_whitelisted">∞ 无限</span><span v-else>{{ quotaInfo.remaining }}/{{ quotaInfo.limit }}</span>
+          <span v-if="quotaInfo.loaded" style="font-size:11px;color:var(--text-muted);"
+            :title="quotaInfo.is_whitelisted ? '白名单用户，不限次数' : '今日剩余任务次数'">
+            今日: <span v-if="quotaInfo.is_whitelisted">∞ 无限</span><span v-else>{{ quotaInfo.remaining }}/{{
+              quotaInfo.limit }}</span>
           </span>
         </div>
         <button class="theme-toggle" @click="toggleTheme" :title="isDark ? '切换到浅色模式' : '切换到深色模式'">

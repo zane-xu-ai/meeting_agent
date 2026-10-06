@@ -23,7 +23,7 @@ from config import settings
 
 def setup_langsmith_tracing():
     """初始化 LangSmith 追踪
-    
+
     通过设置环境变量启用 LangChain/LangGraph 的内置追踪。
     LangSmith SDK 会自动拦截并上传执行轨迹。
     """
@@ -31,22 +31,22 @@ def setup_langsmith_tracing():
     if not settings.langsmith_api_key:
         logger.info("[M11 Tracing] LANGSMITH_API_KEY 未配置，追踪功能已禁用")
         return False
-    
+
     if not settings.langchain_tracing_v2:
         logger.info("[M11 Tracing] LANGCHAIN_TRACING_V2=false，追踪功能已禁用")
         return False
-    
+
     # 设置环境变量 (LangSmith SDK 读取这些变量)
     os.environ["LANGCHAIN_TRACING_V2"] = "true"
     os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGCHAIN_PROJECT"] = settings.langchain_project
-    
+
     logger.info(
         f"[M11 Tracing] LangSmith 追踪已启用 | "
         f"project={settings.langchain_project} | "
         f"endpoint={settings.langsmith_endpoint}"
     )
-    
+
     # 验证 langsmith 包是否安装
     try:
         import langsmith
@@ -56,7 +56,7 @@ def setup_langsmith_tracing():
             "[M11 Tracing] langsmith 包未安装，追踪功能可能无法正常工作。"
             "请运行: pip install langsmith"
         )
-    
+
     return True
 
 
