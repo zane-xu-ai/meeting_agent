@@ -1,5 +1,8 @@
 # Byte-compiled / optimized / DLL files
-data/
+data/*
+!data/cookies/
+data/cookies/*
+!data/cookies/.gitkeep
 model/
 log/
 logs/
