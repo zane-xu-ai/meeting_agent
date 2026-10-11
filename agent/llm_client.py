@@ -93,7 +93,11 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # 根据 max_tokens 动态计算超时 (基础60s + 每4096 tokens额外60s)
+        timeout = 60.0 + (max_tokens / 4096) * 60.0
+        timeout = max(timeout, 120.0)  # 最少 120s
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(f"调用 LLM: {self.model}")
             resp = await client.post(self.chat_url, json=payload, headers=headers)
             resp.raise_for_status()
@@ -159,7 +163,11 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # 根据 max_tokens 动态计算超时 (基础60s + 每4096 tokens额外60s)
+        timeout = 60.0 + (max_tokens / 4096) * 60.0
+        timeout = max(timeout, 120.0)  # 最少 120s
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(
                 f"调用 LLM (messages): {self.model}, turns={len(messages)}")
             resp = await client.post(self.chat_url, json=payload, headers=headers)
