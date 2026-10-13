@@ -212,13 +212,17 @@ async def analyze_interview(
 
     if estimated_tokens <= settings.max_tokens_per_chunk:
         # 短文本: 直接整体分析
-        return await _interview_single(llm, transcript_text)
+        result = await _interview_single(llm, transcript_text)
+        result["llm_model_used"] = llm.model
+        return result
 
     # 长文本: 分段提取问题 + 合并分析
     logger.info(
         f"面试文本较长 (~{estimated_tokens} tokens)，采用分段提取策略"
     )
-    return await _interview_segmented(llm, transcript_text)
+    result = await _interview_segmented(llm, transcript_text)
+    result["llm_model_used"] = llm.model
+    return result
 
 
 async def _interview_single(llm: LLMClient, transcript_text: str) -> dict:
@@ -417,10 +421,14 @@ async def analyze_general(
     if estimated_tokens <= settings.max_tokens_per_chunk:
         logger.info(f"通用分析: 文本较短 (~{estimated_tokens} tokens)，整体分析")
         prompt = GENERAL_ANALYSIS_PROMPT.format(transcript=transcript_text)
-        return await llm.chat_json(prompt)
+        data = await llm.chat_json(prompt)
+        data["llm_model_used"] = llm.model
+        return data
     else:
         logger.info(f"通用分析: 文本较长 (~{estimated_tokens} tokens)，分段分析")
-        return await _segmented_general(transcript_text, llm)
+        data = await _segmented_general(transcript_text, llm)
+        data["llm_model_used"] = llm.model
+        return data
 
 
 async def _segmented_general(

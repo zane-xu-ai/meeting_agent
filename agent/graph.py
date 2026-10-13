@@ -69,6 +69,8 @@ class AgentState(TypedDict):
     llm_start: float                     # LLM 分析开始时间戳
     pipeline_start: float                 # 流水线开始时间戳
     error: str | None                    # 错误信息
+    asr_model_used: str                  # 实际使用的 ASR 模型 (fallback 后)
+    llm_model_used: str                  # 实际使用的 LLM 模型 (fallback 后)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -253,6 +255,7 @@ async def asr_transcribe(state: AgentState) -> dict:
     asr = ASRClient(models=[state["asr_model"]]
                     if state.get("asr_model") else None)
     asr_model = asr.model
+    asr_model_update = {"asr_model_used": asr_model}
 
     # 检查 ASR 缓存
     cached_text = load_asr_cache(audio_stem, asr_model)
@@ -284,6 +287,7 @@ async def asr_transcribe(state: AgentState) -> dict:
             "transcript": cached_transcript,
             "transcript_text": cached_text,
             "asr_duration": 0.0,
+            **asr_model_update,
         }
 
     _notify(task_id, step="正在语音转写...", progress=40,
@@ -317,6 +321,7 @@ async def asr_transcribe(state: AgentState) -> dict:
         "transcript": transcript,
         "transcript_text": transcript_text,
         "asr_duration": asr_duration,
+        **asr_model_update,
     }
 
 
@@ -413,7 +418,8 @@ async def analyze_dispatch(state: AgentState) -> dict:
         result = MeetingResult.model_validate(data)
         output_text = format_markdown(
             result, event_time=None, timing_info=timing_info)
-        save_summary_cache(output_text, audio_stem, rec_type="meeting")
+        save_summary_cache(output_text, audio_stem, rec_type="meeting",
+                           llm_model=llm.model)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="会议分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
@@ -421,6 +427,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
         return {
             "output_text": output_text,
             "llm_start": llm_start,
+            "llm_model_used": llm.model,
         }
 
     # ── 面试录音 ──
@@ -433,17 +440,19 @@ async def analyze_dispatch(state: AgentState) -> dict:
         from pathlib import Path
 
         result_raw = await analyze_interview(transcript_text, llm_model=llm_model)
+        actual_llm_model = result_raw.get("llm_model_used", settings.llm_models[0])
         q_md = format_interview_questions(
             result_raw["q_data"], None, timing_info)
         a_md = format_interview_analysis(
             result_raw["a_data"], None, timing_info)
 
+        asr_model_used = state.get("asr_model_used", settings.asr_models[0])
         # 面试保存为目录
         result_dir = (
             settings.output_dir
             / "summary"
             / "interview"
-            / f"{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
+            / f"{audio_stem}_{asr_model_used}_{actual_llm_model}"
         )
         result_dir.mkdir(parents=True, exist_ok=True)
         (result_dir / "question.md").write_text(q_md, encoding="utf-8")
@@ -456,6 +465,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
             "output_text": a_md,
             "result_path": str(result_dir / "analyze.md"),
             "llm_start": llm_start,
+            "llm_model_used": actual_llm_model,
         }
 
     # ── 通用 / 视频 ──
@@ -463,6 +473,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
     from agent.cache import load_summary_cache, save_summary_cache
 
     cached = load_summary_cache(audio_stem, rec_type=rec_type)
+    actual_llm = ""
     if cached is not None:
         output_text = cached
         logger.info(f"[任务 {task_id}] 使用 Summary 缓存")
@@ -470,8 +481,10 @@ async def analyze_dispatch(state: AgentState) -> dict:
                 step_idx=5, cache_hit=True, llm_duration=0)
     else:
         data = await analyze_general(transcript_text, llm_model=llm_model)
+        actual_llm = data.get("llm_model_used", settings.llm_models[0])
         output_text = format_general_result(data, None, timing_info)
-        save_summary_cache(output_text, audio_stem, rec_type=rec_type)
+        save_summary_cache(output_text, audio_stem, rec_type=rec_type,
+                           llm_model=actual_llm)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="通用分析完成", progress=90,
                 step_idx=5, cache_hit=False, llm_duration=round(llm_dur, 1))
@@ -479,6 +492,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
     return {
         "output_text": output_text,
         "llm_start": llm_start,
+        "llm_model_used": actual_llm,
     }
 
 
@@ -502,7 +516,9 @@ async def format_output(state: AgentState) -> dict:
                 subdir = "other"
 
             result_handler(task_id, state["audio_stem"],
-                           subdir, state["output_text"])
+                           subdir, state["output_text"],
+                           state.get("asr_model_used"),
+                           state.get("llm_model_used"))
 
     # 计算总耗时并发送完成通知 (所有分支统一处理)
     pipeline_start = state.get("pipeline_start", 0)
@@ -603,6 +619,7 @@ async def agent_loop(state: AgentState) -> dict:
         llm_model=llm_model,
         timing_info=timing_info,
         task_id=task_id,
+        asr_model_used=state.get("asr_model_used", ""),
     )
 
     # 初始消息
@@ -615,6 +632,7 @@ async def agent_loop(state: AgentState) -> dict:
     max_iterations = 10
     output_text = ""
     rec_type = "general"
+    actual_llm_model_used = ""
 
     try:
         for iteration in range(max_iterations):
@@ -672,6 +690,8 @@ async def agent_loop(state: AgentState) -> dict:
                     _notify(task_id, rec_type=rec_type, step_idx=4)
                 if "output_text" in tool_result:
                     output_text = tool_result["output_text"]
+                if "llm_model_used" in tool_result:
+                    actual_llm_model_used = tool_result["llm_model_used"]
 
                 # 追加 tool 结果到消息历史
                 messages.append({
@@ -708,6 +728,7 @@ async def agent_loop(state: AgentState) -> dict:
         "rec_type": rec_type,
         "output_text": output_text,
         "llm_start": llm_start,
+        "llm_model_used": actual_llm_model_used,
     }
 
 
@@ -796,11 +817,12 @@ async def _fallback_analyze(
             output_text = format_markdown(
                 result, event_time=None, timing_info=timing_info)
 
-        save_summary_cache(output_text, audio_stem, rec_type="meeting")
+        save_summary_cache(output_text, audio_stem, rec_type="meeting",
+                           llm_model=llm.model)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="会议分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
-        return {"output_text": output_text}
+        return {"output_text": output_text, "llm_model_used": llm.model}
 
     # ── 面试 ──
     if rec_type == "interview":
@@ -811,14 +833,16 @@ async def _fallback_analyze(
 
         result_raw = await analyze_interview(
             transcript_text, llm_model=llm_model)
+        actual_llm_model = result_raw.get("llm_model_used", settings.llm_models[0])
         q_md = format_interview_questions(
             result_raw["q_data"], None, timing_info)
         a_md = format_interview_analysis(
             result_raw["a_data"], None, timing_info)
 
+        asr_model_used = state.get("asr_model_used", settings.asr_models[0])
         result_dir = (
             settings.output_dir / "summary" / "interview"
-            / f"{audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
+            / f"{audio_stem}_{asr_model_used}_{actual_llm_model}"
         )
         result_dir.mkdir(parents=True, exist_ok=True)
         (result_dir / "question.md").write_text(q_md, encoding="utf-8")
@@ -826,7 +850,8 @@ async def _fallback_analyze(
         llm_dur = time.time() - llm_start
         _notify(task_id, step="面试分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
-        return {"output_text": a_md, "result_path": str(result_dir / "analyze.md")}
+        return {"output_text": a_md, "result_path": str(result_dir / "analyze.md"),
+                "llm_model_used": actual_llm_model}
 
     # ── 通用 / 视频 ──
     from agent.pipeline import analyze_general, format_general_result
@@ -862,17 +887,20 @@ async def _fallback_analyze(
             data = llm._extract_json(full_content)
             output_text = format_general_result(data, None, timing_info)
             await _push_stream_event(task_id, "done", {"output_text": output_text})
+            actual_llm = llm.model
         else:
             # 传统非流式调用
-            data = await analyze_general(transcript_text, llm_model=llm_model)
-            output_text = format_general_result(data, None, timing_info)
+            result_general = await analyze_general(transcript_text, llm_model=llm_model)
+            actual_llm = result_general.get("llm_model_used", settings.llm_models[0])
+            output_text = format_general_result(result_general, None, timing_info)
 
-        save_summary_cache(output_text, audio_stem, rec_type=rec_type)
+        save_summary_cache(output_text, audio_stem, rec_type=rec_type,
+                           llm_model=actual_llm)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="通用分析完成", progress=90,
                 step_idx=5, cache_hit=False, llm_duration=round(llm_dur, 1))
 
-    return {"output_text": output_text}
+    return {"output_text": output_text, "llm_model_used": actual_llm}
 
 
 # ═══════════════════════════════════════════════════════════════

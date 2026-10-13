@@ -168,12 +168,14 @@ class ToolContext:
         llm_model: str | None = None,
         timing_info: dict | None = None,
         task_id: str = "",
+        asr_model_used: str = "",
     ):
         self.transcript_text = transcript_text
         self.audio_stem = audio_stem
         self.llm_model = llm_model
         self.timing_info = timing_info or {}
         self.task_id = task_id
+        self.asr_model_used = asr_model_used
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -211,9 +213,11 @@ async def _tool_analyze_meeting(
     output_text = format_markdown(
         result, event_time=None, timing_info=ctx.timing_info
     )
-    save_summary_cache(output_text, ctx.audio_stem, rec_type="meeting")
+    save_summary_cache(output_text, ctx.audio_stem, rec_type="meeting",
+                       llm_model=llm.model)
     logger.info("[Tool] analyze_meeting 完成")
-    return {"rec_type": "meeting", "output_text": output_text}
+    return {"rec_type": "meeting", "output_text": output_text,
+            "llm_model_used": llm.model}
 
 
 async def _tool_analyze_interview(
@@ -231,6 +235,7 @@ async def _tool_analyze_interview(
     result_raw = await analyze_interview(
         transcript, llm_model=ctx.llm_model
     )
+    actual_llm = result_raw.get("llm_model_used", "")
     q_md = format_interview_questions(
         result_raw["q_data"], None, ctx.timing_info
     )
@@ -238,19 +243,22 @@ async def _tool_analyze_interview(
         result_raw["a_data"], None, ctx.timing_info
     )
 
-    # 面试保存为目录
+    # 面试保存为目录 (使用实际模型名而非默认第一个)
+    asr_used = ctx.asr_model_used or settings.asr_models[0]
+    llm_used = actual_llm or settings.llm_models[0]
     result_dir = (
         settings.output_dir
         / "summary"
         / "interview"
-        / f"{ctx.audio_stem}_{settings.asr_models[0]}_{settings.llm_models[0]}"
+        / f"{ctx.audio_stem}_{asr_used}_{llm_used}"
     )
     result_dir.mkdir(parents=True, exist_ok=True)
     (result_dir / "question.md").write_text(q_md, encoding="utf-8")
     (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
 
     logger.info("[Tool] analyze_interview 完成")
-    return {"rec_type": "interview", "output_text": a_md}
+    return {"rec_type": "interview", "output_text": a_md,
+            "llm_model_used": actual_llm}
 
 
 async def _tool_analyze_general(
@@ -270,10 +278,13 @@ async def _tool_analyze_general(
         return {"rec_type": rec_type, "output_text": cached, "cache_hit": True}
 
     data = await analyze_general(transcript, llm_model=ctx.llm_model)
+    actual_llm = data.get("llm_model_used", "")
     output_text = format_general_result(data, None, ctx.timing_info)
-    save_summary_cache(output_text, ctx.audio_stem, rec_type=rec_type)
+    save_summary_cache(output_text, ctx.audio_stem, rec_type=rec_type,
+                       llm_model=actual_llm)
     logger.info("[Tool] analyze_general 完成")
-    return {"rec_type": rec_type, "output_text": output_text, "cache_hit": False}
+    return {"rec_type": rec_type, "output_text": output_text, "cache_hit": False,
+            "llm_model_used": actual_llm}
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -266,10 +266,14 @@ async def _index_task_to_vector_store(task_id: str, task: dict):
         # 降级: 索引失败不影响主流程
 
 
-def _save_result(task_id: str, stem: str, subdir: str, text: str):
+def _save_result(task_id: str, stem: str, subdir: str, text: str,
+                 asr_model_used: str | None = None,
+                 llm_model_used: str | None = None):
     """保存分析结果文件并更新任务状态 (作为 result_handler 注册到 graph)"""
+    asr_name = asr_model_used or settings.asr_models[0]
+    llm_name = llm_model_used or settings.llm_models[0]
     result_path = RESULT_DIR / subdir / \
-        f"{stem}_{settings.asr_models[0]}_{settings.llm_models[0]}.md"
+        f"{stem}_{asr_name}_{llm_name}.md"
     result_path.parent.mkdir(parents=True, exist_ok=True)
     result_path.write_text(text, encoding="utf-8")
     _update(task_id, result_path=str(result_path))
