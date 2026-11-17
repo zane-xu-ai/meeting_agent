@@ -61,11 +61,11 @@ class QuotaManager:
                 "is_whitelisted": False,
             }
 
-    def record_usage(self, client_ip: str, task_id: str):
+    def record_usage(self, client_ip: str, task_id: str) -> bool:
         """记录一次任务使用"""
         # 白名单用户不记录
         if client_ip in self.whitelist:
-            return
+            return True
 
         with self._lock:
             data = self._load_data()
@@ -83,6 +83,9 @@ class QuotaManager:
                     "last_used": None,
                 }
 
+            if data[today][client_ip]["count"] >= self.daily_limit:
+                return False
+
             # 更新计数
             data[today][client_ip]["count"] += 1
             data[today][client_ip]["tasks"].append(task_id)
@@ -93,6 +96,7 @@ class QuotaManager:
 
             # 保存
             self._save_data(data)
+            return True
 
     def get_usage_stats(self, client_ip: str) -> dict:
         """获取当前用户的配额使用情况"""
@@ -149,5 +153,7 @@ class QuotaManager:
 
     def _save_data(self, data: dict):
         """保存数据到 JSON 文件"""
-        with open(self.data_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        temporary = self.data_file.with_suffix(".tmp")
+        with temporary.open("w", encoding="utf-8") as output:
+            json.dump(data, output, ensure_ascii=False, indent=2)
+        temporary.replace(self.data_file)

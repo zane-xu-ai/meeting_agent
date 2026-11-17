@@ -13,12 +13,11 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from loguru import logger
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -26,6 +25,8 @@ from config import settings
 from agent.context import get_context_manager
 from agent.memory import get_memory_manager
 from agent.quota import QuotaManager
+from utils.ingress import RequestLimit, authorized, save_upload
+from utils.media_network import UnsafeMediaURL, validate_media_url
 
 # M5: 长期记忆 (向量检索)
 from agent.embedding import get_embedding_client
@@ -47,6 +48,7 @@ logger.add(
     level="DEBUG",
     rotation="00:00",
     retention="7 days",
+    diagnose=False,
     encoding="utf-8",
     format="{time:YYYY-MM-DD HH:mm:ss} | {level:<7} | {name}:{line} | {message}",
 )
@@ -54,7 +56,7 @@ logger.add(
 
 def _content_disposition(filename: str) -> str:
     """生成兼容中文文件名的 Content-Disposition 头 (RFC 5987)"""
-    ascii_name = filename.encode("ascii", "replace").decode("ascii")
+    ascii_name = "".join(c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in filename)
     utf8_name = quote(filename)
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
 
@@ -63,12 +65,28 @@ def _content_disposition(filename: str) -> str:
 
 app = FastAPI(title="会议助手智能体")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(RequestLimit, limit=lambda: settings.max_upload_bytes + 1024 * 1024)
+
+
+@app.middleware("http")
+async def require_workspace(request: Request, call_next):
+    if request.url.path != "/api/health":
+        try:
+            allowed = authorized(request, settings.workspace_token)
+        except ValueError:
+            allowed = False
+        if not allowed:
+            headers = {"WWW-Authenticate": 'Basic realm="Meeting Agent"'} if settings.workspace_token else None
+            return JSONResponse({"detail": "需要工作区访问权限"}, 401, headers=headers)
+        origin = request.headers.get("origin")
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and origin:
+            expected = f"{request.url.scheme}://{request.headers.get('host', '')}"
+            if origin.rstrip("/") != expected:
+                return JSONResponse({"detail": "请求来源与工作区不同"}, 403)
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
+
 
 UPLOAD_DIR = Path("./uploads")
 RESULT_DIR = settings.output_dir / "summary"
@@ -83,11 +101,7 @@ quota_manager = QuotaManager(
 
 
 def get_client_ip(request: Request) -> str:
-    """获取客户端真实 IP（支持反向代理）"""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host
+    return request.client.host if request.client else "unknown"
 
 # ── Models ───────────────────────────────────────────────────
 
@@ -148,6 +162,12 @@ tasks_lock = threading.Lock()
 # ── M4: Short-term Memory Store ─────────────────────────────────
 # 使用 MemoryManager 管理对话记忆 (替代原有的 chat_histories 字典)
 # 支持滑动窗口、历史压缩等功能
+
+
+def _validate_models(asr_model, llm_model):
+    if (asr_model and asr_model not in settings.asr_models
+            or llm_model and llm_model not in settings.llm_models):
+        raise HTTPException(422, "模型不在当前可用列表")
 
 
 def _new_task_id() -> str:
@@ -281,7 +301,8 @@ def _save_result(task_id: str, stem: str, subdir: str, text: str,
 
 def _process(task_id: str, source: str, source_type: str,
              filename: str, file_type: str,
-             asr_model: str | None = None, llm_model: str | None = None):
+             asr_model: str | None = None, llm_model: str | None = None,
+             source_sha256: str | None = None):
     """后台线程: 通过 LangGraph 流水线处理音视频
 
     统一替代原先的 _process_audio / _process_video /
@@ -310,9 +331,9 @@ def _process(task_id: str, source: str, source_type: str,
         # 构建初始状态
         # 本地文件用原始文件名做缓存 key，URL 用 source 路径
         if source_type.startswith("local_") and filename:
-            audio_stem = get_audio_stem(filename)
+            audio_stem = f"{get_audio_stem(filename)[:40]}_{source_sha256 or task_id}"
         else:
-            audio_stem = get_audio_stem(source)
+            audio_stem = f"url_{task_id}"
 
         initial_state = {
             "source": source,
@@ -353,8 +374,16 @@ def _process(task_id: str, source: str, source_type: str,
                              name=f"index-{task_id}").start()
 
     except Exception as e:
-        logger.error(f"[任务 {task_id}] 处理失败: {e}", exc_info=True)
-        _update(task_id, status="failed", error=str(e), step="处理失败")
+        from agent.llm_client import LLMJSONError
+
+        if isinstance(e, LLMJSONError):
+            code, message = "invalid_model_output", str(e)
+        elif isinstance(e, UnsafeMediaURL):
+            code, message = "unsafe_media_url", str(e)
+        else:
+            code, message = "processing_failed", "处理失败，请按任务编号查看服务日志"
+        logger.error("[任务 {}] {} ({})", task_id, code, type(e).__name__)
+        _update(task_id, status="failed", error=message, error_code=code, step="处理失败")
     finally:
         from agent.graph import unregister_task
         unregister_task(task_id)
@@ -399,7 +428,9 @@ async def upload_file(
             }
         )
 
-    ext = Path(file.filename or "").suffix.lower()
+    _validate_models(asr_model, llm_model)
+    original_name = Path((file.filename or "").replace("\\", "/")).name
+    ext = Path(original_name).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(
             400, f"不支持的文件格式: {ext}\n支持: {', '.join(sorted(ALLOWED_EXTS))}")
@@ -407,13 +438,21 @@ async def upload_file(
     file_type = "video" if ext in VIDEO_EXTS else "audio"
     task_id = _new_task_id()
     task_dir = UPLOAD_DIR / task_id
-    task_dir.mkdir(parents=True, exist_ok=True)
+    task_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
 
     file_path = task_dir / f"{task_id}{ext}"
-    content = await file.read()
-    file_path.write_bytes(content)
+    try:
+        size, digest = await save_upload(file, file_path, settings.max_upload_bytes)
+    except BaseException:
+        task_dir.rmdir()
+        raise
 
     source_type = "local_video" if file_type == "video" else "local_audio"
+
+    if not quota_manager.record_usage(client_ip, task_id):
+        file_path.unlink()
+        task_dir.rmdir()
+        raise HTTPException(429, "今日任务数量已达上限")
 
     with tasks_lock:
         tasks[task_id] = {
@@ -424,24 +463,22 @@ async def upload_file(
             "error": None,
             "result_path": None,
             "asr_result_path": None,
-            "filename": file.filename or "",
+            "filename": original_name,
             "file_type": file_type,
             "video_title": None,
             "source_type": source_type,
-            "file_size": len(content),
+            "file_size": size,
+            "content_sha256": digest,
         }
-
-    # M10: 记录配额使用
-    quota_manager.record_usage(client_ip, task_id)
 
     threading.Thread(
         target=_process,
-        args=(task_id, str(file_path), source_type, file.filename or "",
-              file_type, asr_model, llm_model),
+        args=(task_id, str(file_path), source_type, original_name,
+              file_type, asr_model, llm_model, digest),
         daemon=True,
     ).start()
 
-    return UploadResponse(task_id=task_id, filename=file.filename or "", file_type=file_type)
+    return UploadResponse(task_id=task_id, filename=original_name, file_type=file_type)
 
 
 @app.post("/api/submit-url")
@@ -461,20 +498,16 @@ async def submit_url(request: Request, req: UrlRequest):
             }
         )
 
+    _validate_models(req.asr_model, req.llm_model)
     url = req.url.strip()
-    if not url:
-        raise HTTPException(400, "请输入有效的音视频链接")
-    if not url.startswith(("http://", "https://")):
-        raise HTTPException(400, "链接需以 http:// 或 https:// 开头")
-
-    # 判断是视频还是音频链接
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    domain = parsed.netloc.lower().replace("www.", "")
-    is_video = any(vd in domain for vd in {
-        "youtube.com", "youtu.be", "bilibili.com", "b23.tv",
-        "v.qq.com", "youku.com", "iqiyi.com", "vimeo.com",
-    })
+    if len(url) > 4096:
+        raise HTTPException(400, "链接超过长度限制")
+    try:
+        parsed = await asyncio.to_thread(validate_media_url, url)
+    except (UnsafeMediaURL, OSError) as error:
+        raise HTTPException(400, "请输入可解析的公开 HTTP(S) 音视频链接") from error
+    domain = parsed.hostname
+    is_video = any(domain == host or domain.endswith("." + host) for host in VIDEO_DOMAINS)
     # 也检查扩展名
     if not is_video:
         ext = Path(parsed.path).suffix.lower()
@@ -483,7 +516,10 @@ async def submit_url(request: Request, req: UrlRequest):
     file_type = "video" if is_video else "audio"
     source_type = "url_video" if is_video else "url_audio"
     task_id = _new_task_id()
-    display_name = url[:80] + ("..." if len(url) > 80 else "")
+    display_name = f"{domain}{parsed.path}"[:120]
+
+    if not quota_manager.record_usage(client_ip, task_id):
+        raise HTTPException(429, "今日任务数量已达上限")
 
     with tasks_lock:
         tasks[task_id] = {
@@ -500,9 +536,6 @@ async def submit_url(request: Request, req: UrlRequest):
             "source_type": source_type,
             "file_size": 0,
         }
-
-    # M10: 记录配额使用
-    quota_manager.record_usage(client_ip, task_id)
 
     threading.Thread(
         target=_process,
@@ -1320,4 +1353,4 @@ if frontend_dir.exists():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=9090)
+    uvicorn.run(app, host="127.0.0.1", port=9090, proxy_headers=False)

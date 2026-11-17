@@ -63,7 +63,6 @@ async def classify_recording(
         data = await llm.chat_json(prompt)
         rec_type = data.get("type", "general")
         confidence = data.get("confidence", 0.0)
-        reason = data.get("reason", "")
 
         # 校验类型值
         if rec_type not in ("meeting", "interview", "general"):
@@ -71,7 +70,7 @@ async def classify_recording(
             rec_type = "general"
 
         logger.info(
-            f"录音分类: {rec_type} (confidence={confidence}, reason={reason})")
+            f"录音分类: {rec_type} (confidence={confidence})")
         return rec_type
 
     except Exception as e:

@@ -69,6 +69,7 @@ class AgentState(TypedDict):
     llm_start: float                     # LLM 分析开始时间戳
     pipeline_start: float                 # 流水线开始时间戳
     error: str | None                    # 错误信息
+    clean_asr_cache_hit: bool
     asr_model_used: str                  # 实际使用的 ASR 模型 (fallback 后)
     llm_model_used: str                  # 实际使用的 LLM 模型 (fallback 后)
 
@@ -169,12 +170,10 @@ async def extract_audio(state: AgentState) -> dict:
                 if title:
                     new_stem = sanitize_stem(title)
                     updates["video_title"] = title
-                    updates["audio_stem"] = new_stem
                     filename_stem = new_stem
                     duration = video_info.get("duration")
                     _notify(task_id, video_title=title, step_idx=0,
                             audio_duration=duration or 0)
-                    logger.info(f"[任务 {task_id}] 视频标题: {title}")
             else:
                 logger.warning(f"[任务 {task_id}] 无法获取视频信息，使用 URL stem")
 
@@ -208,12 +207,25 @@ async def preprocess(state: AgentState) -> dict:
     source_type = state["source_type"]
     task_id = state["task_id"]
 
-    # URL 音频直接传给 ASR，跳过预处理
     if source_type == "url_audio":
-        _notify(task_id, step="URL 音频，跳过预处理", progress=35, step_idx=1)
-        return {"asr_input": state["source"]}
+        from tempfile import TemporaryDirectory
+        from utils.media_network import download_public_audio
 
-    # 本地音频 or 从视频提取的音频 → 预处理
+        _notify(task_id, step="正在下载远程音频...", progress=22, step_idx=1)
+        with TemporaryDirectory() as scratch:
+            target = Path(scratch) / "source.audio"
+            await asyncio.to_thread(download_public_audio, state["source"], target, settings.max_upload_bytes)
+            from utils.audio import preprocess_audio
+
+            job_dir = settings.output_dir / "work" / task_id
+            job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path, duration = await asyncio.to_thread(
+                preprocess_audio, target, settings.asr_sample_rate, job_dir / "audio.wav",
+            )
+        _notify(task_id, step="预处理完成，准备转写...", progress=35, step_idx=1,
+                audio_duration=round(duration, 1))
+        return {"preprocessed_path": str(path), "asr_input": str(path)}
+
     audio_path = state.get("audio_path") or state["source"]
     _notify(task_id, step="正在预处理音频...", progress=22, step_idx=1)
     logger.info(f"[任务 {task_id}] 预处理音频: {Path(audio_path).name}")
@@ -261,6 +273,7 @@ async def asr_transcribe(state: AgentState) -> dict:
     cached_text = load_asr_cache(audio_stem, asr_model)
     if cached_text is not None:
         logger.info(f"[任务 {task_id}] ASR 缓存命中，跳过转写")
+        cached_text = cached_text.strip()
         # 解析缓存的格式化文本为 Sentence 对象
         from models.schemas import Transcript, Sentence
         import re
@@ -287,6 +300,7 @@ async def asr_transcribe(state: AgentState) -> dict:
             "transcript": cached_transcript,
             "transcript_text": cached_text,
             "asr_duration": 0.0,
+            "clean_asr_cache_hit": True,
             **asr_model_update,
         }
 
@@ -297,6 +311,7 @@ async def asr_transcribe(state: AgentState) -> dict:
     transcript = await asr.transcribe(asr_input)
     asr_duration = time.time() - t0
 
+    asr_model_update = {"asr_model_used": asr.model}
     transcript_text = transcript.formatted_text
     sentence_count = len(transcript.sentences)
     logger.info(
@@ -315,7 +330,7 @@ async def asr_transcribe(state: AgentState) -> dict:
             progress=55, step_idx=2,
             asr_sentences=sentence_count,
             asr_duration=round(asr_duration, 1),
-            asr_chars=len(transcript_text))
+            asr_chars=len(transcript_text), asr_model_used=asr.model)
 
     return {
         "transcript": transcript,
@@ -340,11 +355,11 @@ async def text_clean(state: AgentState) -> dict:
 
     # 使用 ASR 返回的完整 Transcript 对象 (保留说话人/时间戳)
     raw_transcript = state["transcript"]
-    cleaned = processor.clean(raw_transcript)
-    cleaned_text = cleaned.formatted_text
+    cleaned = raw_transcript if state.get("clean_asr_cache_hit") else processor.clean(raw_transcript)
+    cleaned_text = transcript_text if state.get("clean_asr_cache_hit") else cleaned.formatted_text
 
     # 保存 ASR 缓存
-    asr_path = save_asr_cache(cleaned_text, state["audio_stem"])
+    asr_path = save_asr_cache(cleaned_text, state["audio_stem"], state.get("asr_model_used"))
     cleaned_count = len(cleaned.sentences)
     _notify(task_id, asr_result_path=str(asr_path),
             step=f"文本清洗完成 ({cleaned_count} 句)", progress=60,
@@ -446,8 +461,7 @@ async def analyze_dispatch(state: AgentState) -> dict:
     if rec_type == "interview":
         from agent.pipeline import (
             analyze_interview,
-            format_interview_questions,
-            format_interview_analysis,
+            save_interview_report,
         )
         from agent.cache import load_interview_cache
         from pathlib import Path
@@ -471,10 +485,6 @@ async def analyze_dispatch(state: AgentState) -> dict:
         result_raw = await analyze_interview(transcript_text, llm_model=llm_model)
         actual_llm_model = result_raw.get(
             "llm_model_used", settings.llm_models[0])
-        q_md = format_interview_questions(
-            result_raw["q_data"], None, timing_info)
-        a_md = format_interview_analysis(
-            result_raw["a_data"], None, timing_info)
 
         asr_model_used = state.get("asr_model_used", settings.asr_models[0])
         # 面试保存为目录
@@ -484,16 +494,14 @@ async def analyze_dispatch(state: AgentState) -> dict:
             / "interview"
             / f"{audio_stem}_{asr_model_used}_{actual_llm_model}"
         )
-        result_dir.mkdir(parents=True, exist_ok=True)
-        (result_dir / "question.md").write_text(q_md, encoding="utf-8")
-        (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
+        a_md, report_path = save_interview_report(result_raw, result_dir, timing_info)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="面试分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
 
         return {
             "output_text": a_md,
-            "result_path": str(result_dir / "analyze.md"),
+            "result_path": str(report_path),
             "llm_start": llm_start,
             "llm_model_used": actual_llm_model,
         }
@@ -699,7 +707,7 @@ async def agent_loop(state: AgentState) -> dict:
                 except json.JSONDecodeError as e:
                     logger.warning(
                         f"[任务 {task_id}] Tool {fn_name} 参数解析失败: {e}"
-                        f"，原始: {tc['function']['arguments'][:200]}")
+                        )
                     # 尝试提取第一个完整 JSON 对象
                     raw_args = tc["function"]["arguments"]
                     start = raw_args.find("{")
@@ -879,8 +887,7 @@ async def _fallback_analyze(
     # ── 面试 ──
     if rec_type == "interview":
         from agent.pipeline import (
-            analyze_interview, format_interview_questions,
-            format_interview_analysis,
+            analyze_interview, save_interview_report,
         )
         from agent.cache import load_interview_cache
 
@@ -902,23 +909,17 @@ async def _fallback_analyze(
             transcript_text, llm_model=llm_model)
         actual_llm_model = result_raw.get(
             "llm_model_used", settings.llm_models[0])
-        q_md = format_interview_questions(
-            result_raw["q_data"], None, timing_info)
-        a_md = format_interview_analysis(
-            result_raw["a_data"], None, timing_info)
 
         asr_model_used = state.get("asr_model_used", settings.asr_models[0])
         result_dir = (
             settings.output_dir / "summary" / "interview"
             / f"{audio_stem}_{asr_model_used}_{actual_llm_model}"
         )
-        result_dir.mkdir(parents=True, exist_ok=True)
-        (result_dir / "question.md").write_text(q_md, encoding="utf-8")
-        (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
+        a_md, report_path = save_interview_report(result_raw, result_dir, timing_info)
         llm_dur = time.time() - llm_start
         _notify(task_id, step="面试分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
-        return {"output_text": a_md, "result_path": str(result_dir / "analyze.md"),
+        return {"output_text": a_md, "result_path": str(report_path),
                 "llm_model_used": actual_llm_model}
 
     # ── 通用 / 视频 ──

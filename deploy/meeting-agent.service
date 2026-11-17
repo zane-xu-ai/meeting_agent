@@ -6,7 +6,7 @@ StartLimitBurst=3
 [Service]
 Type=exec
 WorkingDirectory=%h/projects/meeting_agent
-ExecStart=%h/projects/meeting_agent/.venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 19090
+ExecStart=%h/projects/meeting_agent/.venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 19090 --no-proxy-headers
 Environment=PYTHONUNBUFFERED=1
 UMask=0077
 Restart=on-failure

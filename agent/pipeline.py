@@ -425,6 +425,17 @@ def format_interview_analysis(
     return "\n".join(lines)
 
 
+def save_interview_report(result: dict, output_dir: Path, timing_info: dict) -> tuple[str, Path]:
+    """Write both interview exports and return the primary Markdown report."""
+    questions = format_interview_questions(result["q_data"], None, timing_info)
+    report = format_interview_analysis(result["a_data"], None, timing_info)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "question.md").write_text(questions, encoding="utf-8")
+    report_path = output_dir / "analyze.md"
+    report_path.write_text(report, encoding="utf-8")
+    return report, report_path
+
+
 # ---------- 通用录音分析 ----------
 
 async def analyze_general(

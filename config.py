@@ -107,6 +107,10 @@ class Settings(BaseSettings):
         description="LangSmith API 端点"
     )
 
+    # 本机部署默认通过 SSH 回环访问。
+    workspace_token: str = ""
+    max_upload_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
+
     # 输出
     output_dir: Path = Field(default=Path("./output"), description="输出目录")
 

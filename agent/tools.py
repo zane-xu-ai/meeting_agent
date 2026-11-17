@@ -228,8 +228,7 @@ async def _tool_analyze_interview(
     """工具: 面试逐题分析"""
     from agent.pipeline import (
         analyze_interview,
-        format_interview_questions,
-        format_interview_analysis,
+        save_interview_report,
     )
     from agent.cache import load_interview_cache
     from config import settings
@@ -251,13 +250,6 @@ async def _tool_analyze_interview(
         ctx.transcript_text, llm_model=ctx.llm_model
     )
     actual_llm = result_raw.get("llm_model_used", "")
-    q_md = format_interview_questions(
-        result_raw["q_data"], None, ctx.timing_info
-    )
-    a_md = format_interview_analysis(
-        result_raw["a_data"], None, ctx.timing_info
-    )
-
     # 面试保存为目录 (使用实际模型名而非默认第一个)
     asr_used = ctx.asr_model_used or settings.asr_models[0]
     llm_used = actual_llm or settings.llm_models[0]
@@ -267,13 +259,11 @@ async def _tool_analyze_interview(
         / "interview"
         / f"{ctx.audio_stem}_{asr_used}_{llm_used}"
     )
-    result_dir.mkdir(parents=True, exist_ok=True)
-    (result_dir / "question.md").write_text(q_md, encoding="utf-8")
-    (result_dir / "analyze.md").write_text(a_md, encoding="utf-8")
+    a_md, report_path = save_interview_report(result_raw, result_dir, ctx.timing_info)
 
     logger.info("[Tool] analyze_interview 完成")
     return {"rec_type": "interview", "output_text": a_md,
-            "result_path": str(result_dir / "analyze.md"),
+            "result_path": str(report_path),
             "cache_hit": False, "llm_model_used": actual_llm}
 
 

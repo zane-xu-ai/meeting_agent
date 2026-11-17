@@ -7,6 +7,7 @@
   <title>Meeting Agent · 会议助手</title>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://unpkg.com/marked@12/marked.min.js"></script>
+  <script src="https://unpkg.com/dompurify@3/dist/purify.min.js"></script>
   <style>
     *,
     *::before,
@@ -2227,7 +2228,7 @@
 
         const renderedMd = computed(() => {
           if (!resultMd.value) return '';
-          return marked.parse(resultMd.value, { breaks: true });
+          return renderSafeMarkdown(resultMd.value);
         });
 
         const stageTimings = computed(() => {
@@ -2327,6 +2328,11 @@
         }
 
         // ── Upload ──
+        function renderSafeMarkdown(text) {
+          if (!window.DOMPurify) return '';
+          return DOMPurify.sanitize(marked.parse(text, { breaks: true }), { FORBID_TAGS: ['img'] });
+        }
+
         async function uploadFile(file) {
           // M10: 配额检查
           const quotaOk = await checkQuotaBeforeSubmit();
@@ -2585,7 +2591,7 @@
         // ── Chat ──
         function renderMd(text) {
           if (!text) return '';
-          return marked.parse(text, { breaks: true });
+          return renderSafeMarkdown(text);
         }
 
         function scrollChatToBottom() {

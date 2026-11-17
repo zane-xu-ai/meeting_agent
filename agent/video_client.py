@@ -15,6 +15,9 @@ from pathlib import Path
 
 from loguru import logger
 
+from config import settings
+from utils.media_network import PublicYoutubeDL, parse_media_url
+
 # 视频文件扩展名
 VIDEO_EXTENSIONS = {
     ".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv",
@@ -118,7 +121,7 @@ def _extract_from_local(
     # ffmpeg: 提取音频 -> 单声道 16kHz WAV
     cmd = [
         "ffmpeg",
-        "-i", str(video_path),
+        "-nostdin", "-protocol_whitelist", "file,pipe,crypto", "-i", str(video_path),
         "-vn",                    # 不要视频
         "-acodec", "pcm_s16le",   # 16-bit PCM
         "-ar", "16000",           # 16kHz 采样率
@@ -176,7 +179,9 @@ def _clean_url(url: str) -> str:
 
 def _is_bilibili_url(url: str) -> bool:
     """判断是否为 Bilibili 链接"""
-    return bool(re.search(r"bilibili\.com|b23\.tv|bili2233\.cn", url, re.IGNORECASE))
+    host = parse_media_url(url).hostname
+    return any(host == domain or host.endswith("." + domain)
+               for domain in ("bilibili.com", "b23.tv", "bili2233.cn"))
 
 
 def _get_ydl_opts(url: str, base_opts: dict) -> dict:
@@ -201,9 +206,8 @@ def _get_ydl_opts(url: str, base_opts: dict) -> dict:
                 opts["cookiesfrombrowser"] = (browser,)
                 logger.debug(f"尝试从 {browser} 提取 cookies...")
                 # 测试 cookies 是否有效
-                import yt_dlp
                 test_opts = {**opts, "quiet": True, "skip_download": True}
-                with yt_dlp.YoutubeDL(test_opts) as ydl:
+                with PublicYoutubeDL(test_opts) as ydl:
                     ydl.extract_info(url, download=False)
                 logger.info(f"使用 {browser} 浏览器 cookies")
                 return opts
@@ -228,8 +232,6 @@ async def _extract_from_url(
     progress_cb: callable | None = None,
 ) -> Path:
     """从网络视频 URL 下载并提取音频 (使用 yt-dlp Python 模块)"""
-    import yt_dlp
-
     url = _clean_url(url)  # 清洗 URL
 
     if output_dir is None:
@@ -242,10 +244,12 @@ async def _extract_from_url(
     else:
         output_template = str(output_dir / "%(title)s_audio.%(ext)s")
 
-    logger.info(f"从网络视频提取音频: {url[:80]}...")
+    logger.info("从网络提取音频: {}", parse_media_url(url).hostname)
 
     # 下载进度回调
     def _progress_hook(d):
+        if max(d.get("downloaded_bytes") or 0, d.get("total_bytes") or 0) > settings.max_upload_bytes:
+            raise ValueError("在线媒体超过大小限制")
         if progress_cb and d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
             downloaded = d.get("downloaded_bytes", 0)
@@ -261,7 +265,7 @@ async def _extract_from_url(
         "audioquality": "0",            # 最佳质量
         "outtmpl": output_template,
         "noplaylist": True,             # 不下载播放列表
-        "nocheckcertificate": True,
+        "max_filesize": settings.max_upload_bytes,
         "quiet": True,                  # 静默模式
         "no_warnings": True,
         "progress_hooks": [_progress_hook],
@@ -271,10 +275,10 @@ async def _extract_from_url(
     ydl_opts = _get_ydl_opts(url, base_opts)
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with PublicYoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
     except Exception as e:
-        raise RuntimeError(f"yt-dlp 下载失败: {e}")
+        raise RuntimeError("在线媒体下载失败") from e
 
     # 查找生成的文件
     wav_files = list(output_dir.glob("*_audio.wav"))
@@ -304,8 +308,6 @@ async def get_video_info(source: str) -> dict | None:
 
 async def _get_url_video_info(url: str) -> dict | None:
     """获取网络视频的元信息 (使用 yt-dlp Python 模块)"""
-    import yt_dlp
-
     url = _clean_url(url)  # 清洗 URL
 
     base_opts = {
@@ -317,7 +319,7 @@ async def _get_url_video_info(url: str) -> dict | None:
     ydl_opts = _get_ydl_opts(url, base_opts)
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with PublicYoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return {
                 "title": info.get("title", ""),
@@ -329,7 +331,7 @@ async def _get_url_video_info(url: str) -> dict | None:
                 "webpage_url": info.get("webpage_url", url),
             }
     except Exception as e:
-        logger.warning(f"获取视频信息失败: {e}")
+        logger.warning("获取视频信息失败: {}", type(e).__name__)
         return None
 
 
@@ -342,8 +344,6 @@ async def extract_subtitles(source: str) -> str | None:
     """
     if not source.startswith(("http://", "https://")):
         return None
-
-    import yt_dlp
 
     output_dir = Path(tempfile.mkdtemp())
 
@@ -360,7 +360,7 @@ async def extract_subtitles(source: str) -> str | None:
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with PublicYoutubeDL(ydl_opts) as ydl:
             ydl.download([source])
 
         # 查找字幕文件
@@ -376,7 +376,7 @@ async def extract_subtitles(source: str) -> str | None:
         return text
 
     except Exception as e:
-        logger.warning(f"提取字幕失败: {e}")
+        logger.warning("提取字幕失败: {}", type(e).__name__)
         return None
 
 
