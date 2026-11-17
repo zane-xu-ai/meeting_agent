@@ -38,6 +38,7 @@ class HistoryTests(unittest.TestCase):
             transcript = Transcript(sentences=[Sentence(text="示例", begin_time=10, end_time=30)])
             result = {
                 "source": str(source), "rec_type": "interview", "output_text": report.read_text(),
+                "asr_model_used": "local-whisper",
                 "transcript": transcript, "cleaned_transcript": transcript, "transcript_text": transcript.formatted_text,
                 "analysis_data": {"q_data": {"questions": [{"id": 1, "question": "示例问题"}]},
                                   "a_data": {"overall_score": 85, "question_analyses": [{"id": 1, "score": 85}]}},
@@ -58,6 +59,7 @@ class HistoryTests(unittest.TestCase):
                 self.assertIsNone(item["source"]["source_created_at"])
                 self.assertIsNotNone(item["source"]["source_modified_at"])
                 self.assertEqual(item["media"]["sample_rate_hz"], 16000)
+                self.assertEqual(client.get(f"/api/status/{task_id}").json()["asr_model_used"], "local-whisper")
                 self.assertEqual(client.get(f"/api/history/{task_id}/media").status_code, 200)
                 self.assertIn("面试报告", client.get(f"/api/result/{task_id}/download").text)
                 self.assertIn("示例问题", client.get(f"/api/questions/{task_id}/download").text)

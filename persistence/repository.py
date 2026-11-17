@@ -236,7 +236,9 @@ class Repository:
             ))
             self._questions(connection, analysis_id, data)
             completed = {**state, "status": "completed", "progress": 100, "step": "分析完成",
-                         "rec_type": category, "llm_model_used": result.get("llm_model_used") or state.get("llm_model_used")}
+                         "rec_type": category,
+                         "asr_model_used": result.get("asr_model_used") or state.get("asr_model_used"),
+                         "llm_model_used": result.get("llm_model_used") or state.get("llm_model_used")}
             connection.execute(update(s.analysis_jobs).where(s.analysis_jobs.c.id == job_id).values(
                 state=completed, category=category, status="completed", finished_at=func.now(),
             ))
@@ -295,9 +297,16 @@ class Repository:
 
     def task(self, job_id):
         with self.engine.connect() as connection:
-            return connection.scalar(select(s.analysis_jobs.c.state).where(
+            state = connection.scalar(select(s.analysis_jobs.c.state).where(
                 s.analysis_jobs.c.id == job_id, s.analysis_jobs.c.workspace_id == PERSONAL,
             ))
+            if state and state["status"] == "completed" and not state.get("asr_model_used"):
+                model = connection.scalar(select(s.transcripts.c.model).where(
+                    s.transcripts.c.job_id == job_id, s.transcripts.c.variant == "cleaned",
+                ))
+                if model:
+                    state["asr_model_used"] = model
+            return state
 
     def content(self, job_id, kind):
         table = s.transcripts if kind == "asr" else s.analyses
