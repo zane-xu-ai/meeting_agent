@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     database_url: str = ""
     amqp_url: str = ""
     amqp_worker_url: str = ""
+    gpu_database_url: str = ""
+    gpu_device_uuid: str = ""
+    local_asr_python: Path | None = None
+    local_asr_model: Path | None = None
     media_storage_dir: Path = Path("./var/media")
     max_upload_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
 

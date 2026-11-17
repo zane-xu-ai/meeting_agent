@@ -231,3 +231,18 @@ uploads/                          # Web 上传文件，按任务 ID 分目录
 创建项目 RabbitMQ vhost，允许项目账号声明 `meeting.tasks`、`meeting.dlx` 和队列。运行数据库迁移，配置 `AMQP_URL` 以及可选的 `AMQP_WORKER_URL`。安装 `deploy/meeting-agent-dispatcher.service` 和 `deploy/meeting-agent-worker@.service` 到 `~/.config/systemd/user/`，执行 `systemctl --user daemon-reload`，启用 dispatcher 及 `meeting-agent-worker@io.service`、`@cpu.service`、`@cloud.service`。开发环境可分别运行 `uv run --locked python -m persistence.broker dispatcher|io|cpu|cloud`。
 
 页面「批量任务」支持最多 20 项混合提交，保留原有单项 API。RabbitMQ 不可用时已承诺的任务保存在 PostgreSQL，并在恢复后派发。失败任务可从已保存的上一阶段续跑。
+
+### 启用共享 GPU 和本地 ASR
+
+在同一 Ubuntu PostgreSQL 实例建立独立 `gpu_ops` 数据库，并授权受管项目账号使用同一数据库。设置 `GPU_DATABASE_URL`，按需指定 `GPU_DEVICE_UUID`。先以迁移账号运行 `uv run --locked python -m gpu_ops init`。在小样本冷、热启动校准后登记显存预算，例如 `python -m gpu_ops profile whisper-small 3072 --margin 1024`。预算为预计新增显存，另加安全余量。`--exclusive` 要求无其他 CUDA 计算进程。
+
+配置 `LOCAL_ASR_PYTHON` 和预下载的 `LOCAL_ASR_MODEL` 后，可在页面选择 `local-whisper`。启用 `meeting-agent-worker@gpu.service` 和 `meeting-agent-gpu-watch.service`。等待状态会释放 RabbitMQ 消费槽，任务由数据库按间隔重新派发。用 `python -m gpu_ops status`、批量任务页或 `/api/gpu/metrics` 查询显存、持有者和等待告警。watch 日志仅在告警升级或恢复时记录状态变化。
+
+其他项目可使用同一调度器执行：
+
+```bash
+uv run --locked python -m gpu_ops run --project rag_law --profile rag-small -- /path/to/python /path/to/task.py
+printf '只回答：就绪\n' | uv run --locked python -m gpu_ops run --project ollama --profile ollama-small -- .venv/bin/python -m gpu_ops.ollama_request MODEL
+```
+
+每个命令先按实测需求注册 profile。Ollama 建议单模型、单并发，受管请求限制上下文并在结束时卸载模型。其他项目直接启动 GPU 时，系统只能观测它们的实际占用，在无法满足预算时将本地任务留在队列。稳定性观察达到计划标准后再决定是否默认提供 GPU 入口。

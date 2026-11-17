@@ -166,8 +166,13 @@ tasks_lock = threading.Lock()
 # 支持滑动窗口、历史压缩等功能
 
 
+def _asr_models():
+    from agent.local_asr import LOCAL_MODEL, available
+    return [*settings.asr_models, LOCAL_MODEL] if available() else settings.asr_models
+
+
 def _validate_models(asr_model, llm_model):
-    if (asr_model and asr_model not in settings.asr_models
+    if (asr_model and asr_model not in _asr_models()
             or llm_model and llm_model not in settings.llm_models):
         raise HTTPException(422, "模型不在当前可用列表")
 
@@ -966,11 +971,37 @@ def invalidate_cache_stage(stage: str):
     return {"invalidated": invalidate(_history_repository(), stage=stage)}
 
 
+@app.get("/api/gpu")
+def gpu_status():
+    from gpu_ops.scheduler import configured
+    scheduler = configured()
+    if not scheduler:
+        raise HTTPException(503, "GPU 调度未启用")
+    try:
+        return scheduler.snapshot()
+    except Exception as error:
+        raise HTTPException(503, "GPU 监测暂不可用") from error
+
+
+@app.get("/api/gpu/metrics")
+def gpu_metrics():
+    data = gpu_status()
+    oldest = max((item["wait_seconds"] for item in data["waiting"]), default=0)
+    metrics = {
+        "meeting_gpu_free_mib": data["free_mib"], "meeting_gpu_total_mib": data["total_mib"],
+        "meeting_gpu_compute_processes": data["compute_processes"],
+        "meeting_gpu_waiting_jobs": len(data["waiting"]), "meeting_gpu_oldest_wait_seconds": oldest,
+        "meeting_gpu_active_lease": int(data["lease"] is not None),
+        "meeting_gpu_alert": {"warning": 1, "critical": 2}.get((data["alert"] or {}).get("level"), 0),
+    }
+    return PlainTextResponse("".join(f"{name} {value}\n" for name, value in metrics.items()))
+
+
 @app.get("/api/models")
 async def get_models():
     """获取可用的 ASR 和 LLM 模型列表"""
     return {
-        "asr_models": settings.asr_models,
+        "asr_models": _asr_models(),
         "llm_models": settings.llm_models,
     }
 

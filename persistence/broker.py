@@ -73,7 +73,8 @@ def initial_state(work):
     }
 
 
-def execute_stage(repo, work):
+def execute_stage(repo, work, gpu=None):
+    from agent.local_asr import CURRENT_LEASE
     from agent.graph import pipeline_nodes, register_progress_cb, register_result_handler, unregister_task
 
     identifier = work["job_id"]
@@ -93,11 +94,13 @@ def execute_stage(repo, work):
 
     register_progress_cb(identifier, progress)
     register_result_handler(identifier, save_report)
+    context_token = CURRENT_LEASE.set(gpu)
     try:
         function = pipeline_nodes()[dispatch.STEPS[work["step"]][0]]
         state.update(asyncio.run(function(state)))
         dispatch.complete(repo, work, state)
     finally:
+        CURRENT_LEASE.reset(context_token)
         unregister_task(identifier)
 
 
@@ -115,7 +118,10 @@ async def handle(repo, message, route=None):
         if work:
             renewal = asyncio.create_task(renew(repo, work))
             try:
-                await asyncio.to_thread(execute_stage, repo, work)
+                if route == "gpu":
+                    await execute_gpu(repo, work)
+                else:
+                    await asyncio.to_thread(execute_stage, repo, work)
             except Exception as error:
                 logger.warning("任务 {} 阶段失败: {}", work["job_id"], type(error).__name__)
                 await asyncio.to_thread(dispatch.failed, repo, work, error)
@@ -130,6 +136,31 @@ async def handle(repo, message, route=None):
         if not message.processed:
             with suppress(Exception):
                 await message.ack()
+
+
+async def execute_gpu(repo, work):
+    from agent.local_asr import GPU_PROFILE, available
+    from gpu_ops.scheduler import configured
+
+    scheduler = configured()
+    if not scheduler or not available():
+        raise RuntimeError("local GPU ASR is not configured")
+    try:
+        lease, reason = await asyncio.to_thread(scheduler.acquire, work["id"], "meeting_agent", GPU_PROFILE)
+    except ValueError:
+        raise
+    except Exception:
+        lease, reason = None, "monitor_unavailable"
+    if not lease:
+        await asyncio.to_thread(dispatch.defer_gpu, repo, work, reason)
+        return
+    try:
+        await asyncio.to_thread(execute_stage, repo, work, (scheduler, lease))
+    except MemoryError:
+        await asyncio.to_thread(scheduler.report_oom, lease[0])
+        raise
+    finally:
+        await asyncio.to_thread(scheduler.release, lease)
 
 
 async def renew(repo, work):

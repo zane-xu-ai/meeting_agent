@@ -267,6 +267,18 @@ async def asr_transcribe(state: AgentState) -> dict:
 
     logger.info(f"[任务 {task_id}] 开始 ASR 转写...")
 
+    from agent.local_asr import LOCAL_MODEL, transcribe
+
+    if state.get("asr_model") == LOCAL_MODEL:
+        start = time.time()
+        _notify(task_id, step="本地 GPU 转写", progress=40, asr_model_used=LOCAL_MODEL, step_idx=2)
+        result = await asyncio.to_thread(transcribe, asr_input)
+        elapsed = time.time() - start
+        _notify(task_id, step="本地转写完成", progress=55, asr_duration=round(elapsed, 1),
+                asr_sentences=len(result.sentences), step_idx=2)
+        return {"transcript": result, "transcript_text": result.formatted_text,
+                "asr_duration": elapsed, "asr_model_used": LOCAL_MODEL}
+
     from agent.asr_client import ASRClient
     from agent.cache import load_asr_cache
 

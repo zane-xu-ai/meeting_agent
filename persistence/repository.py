@@ -251,6 +251,7 @@ class Repository:
             id=identifier, job_id=job, variant=variant, parent_id=parent, text=text,
             content_sha256=digest_text(text), duration_ms=transcript.duration_ms if transcript else None,
             model=result.get("asr_model_used"),
+            provider="local" if result.get("asr_model_used") == "local-whisper" else "dashscope" if result.get("asr_model_used") else None,
         ))
         if transcript and transcript.sentences:
             connection.execute(insert(s.transcript_segments), [

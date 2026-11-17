@@ -95,3 +95,22 @@ request('/api/models').then(({asr_models, llm_models}) => {
   }
 }).catch(error => element('message').textContent = error.message);
 poll();
+
+async function refreshGpu() {
+  try {
+    const data = await request('/api/gpu');
+    element('gpuPanel').hidden = false;
+    const alert = data.alert?.reason ? ` · 告警 ${data.alert.level}: ${data.alert.reason}` : '';
+    element('gpuInfo').textContent = `空闲 ${data.free_mib} / ${data.total_mib} MiB · `
+      + `计算进程 ${data.compute_processes} · 租约 ${data.lease?.project || '空闲'}${alert}`;
+    element('gpuWait').replaceChildren(...data.waiting.map((row) => {
+      const item = document.createElement('li');
+      item.textContent = `${row.project} · ${row.profile} · ${row.reason || '排队'} · ${row.wait_seconds} 秒`;
+      return item;
+    }));
+  } catch (error) {
+    if (!element('gpuPanel').hidden) element('gpuInfo').textContent = error.message;
+  }
+}
+refreshGpu();
+setInterval(refreshGpu, 10000);

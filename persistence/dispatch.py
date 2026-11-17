@@ -38,6 +38,11 @@ def enabled():
     return bool(settings.amqp_url)
 
 
+def stage_route(job, step):
+    from agent.local_asr import LOCAL_MODEL
+    return "gpu" if STEPS[step][0] == "asr_transcribe" and job["request_config"].get("asr_model") == LOCAL_MODEL else STEPS[step][1]
+
+
 def enqueue(connection, job_id, step=0, *, attempt=1, delay=0, route=None):
     queue = route or STEPS[step][1]
     ready = utcnow() + timedelta(seconds=delay)
@@ -166,11 +171,37 @@ def complete(repo, work, state):
             payload = encode(state)
             connection.execute(pg_insert(checkpoints).values(job_id=job["id"], step=work["step"], payload=payload)
                                .on_conflict_do_update(index_elements=["job_id", "step"], set_={"payload": payload}))
-            enqueue(connection, job["id"], work["step"] + 1)
+            next_step = work["step"] + 1
+            enqueue(connection, job["id"], next_step, route=stage_route(job, next_step))
             _change(repo, connection, job, status="pending", step="等待下一阶段")
         connection.execute(update(outbox).where(outbox.c.id == work["id"])
                            .values(status="completed", finished_at=func.now(), lease_token=None))
         return True
+
+
+GPU_WAIT_REASONS = {
+    "managed_busy": "受管 GPU 正在运行", "stale_process": "等待过期任务释放 GPU",
+    "external_memory": "外部进程占用显存", "capacity": "显存预算不足",
+    "capacity_changed": "显存用量变化", "fair_queue": "其他项目优先",
+    "monitor_unavailable": "调度器或显存监测暂不可用",
+}
+
+
+def defer_gpu(repo, work, reason):
+    with repo.engine.begin() as connection:
+        if not _owned(connection, work):
+            return
+        job = _job(connection, work["job_id"])
+        if job["status"] == "cancel_requested":
+            _change(repo, connection, job, status="cancelled", step="已取消")
+            connection.execute(update(outbox).where(outbox.c.id == work["id"]).values(status="cancelled"))
+            return
+        ready = utcnow() + timedelta(seconds=10)
+        connection.execute(update(outbox).where(outbox.c.id == work["id"]).values(
+            status="pending", available_at=ready, publish_after=ready, lease_token=None, lease_until=None,
+        ))
+        _change(repo, connection, job, status="waiting_gpu", step=GPU_WAIT_REASONS.get(reason, reason),
+                gpu_wait_reason=reason)
 
 
 def retryable(error):
@@ -227,7 +258,7 @@ def resume(repo, job_id):
         step = connection.scalar(select(func.max(outbox.c.step)).where(outbox.c.job_id == job_id))
         if step is None:
             return False
-        enqueue(connection, job_id, step)
+        enqueue(connection, job_id, step, route=stage_route(job, step))
         _change(repo, connection, job, status="pending", step="等待续跑", error=None, error_code=None)
         return True
 

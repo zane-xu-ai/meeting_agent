@@ -284,8 +284,10 @@ async def graph_stage(layer, function, state):
         material = [await asyncio.to_thread(path_hash, state.get("audio_path") or state.get("source_asset") or state["source"]),
                     task_type, settings.asr_sample_rate, ffmpeg_version()]
     elif layer == "asr":
+        from agent.local_asr import LOCAL_MODEL, model_fingerprint
         material = [await asyncio.to_thread(path_hash, state["asr_input"]),
-                    state.get("asr_model") or settings.asr_models, settings.asr_sample_rate]
+                    state.get("asr_model") or settings.asr_models, settings.asr_sample_rate,
+                    model_fingerprint() if state.get("asr_model") == LOCAL_MODEL else None]
     elif layer == "clean":
         material = [state["transcript"].model_dump(mode="json"), settings.min_sentence_length]
     else:

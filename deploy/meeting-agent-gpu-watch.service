@@ -1,0 +1,12 @@
+[Unit]
+Description=Meeting Agent shared GPU monitor
+
+[Service]
+WorkingDirectory=%h/projects/meeting_agent
+ExecStart=%h/projects/meeting_agent/.venv/bin/python -u -m gpu_ops watch
+UMask=0077
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
