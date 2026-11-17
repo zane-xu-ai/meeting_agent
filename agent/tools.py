@@ -183,10 +183,11 @@ async def _tool_classify_recording(
     """工具: 录音类型分类"""
     from agent.classifier import classify_recording
 
+    details = {}
     rec_type = await classify_recording(
-        ctx.transcript_text, llm_model=ctx.llm_model)
+        ctx.transcript_text, llm_model=ctx.llm_model, details=details)
     logger.info(f"[Tool] classify_recording → {rec_type}")
-    return {"rec_type": rec_type}
+    return {"rec_type": rec_type, "classification_data": details}
 
 
 async def _tool_analyze_meeting(
@@ -219,7 +220,7 @@ async def _tool_analyze_meeting(
                        llm_model=llm.model)
     logger.info("[Tool] analyze_meeting 完成")
     return {"rec_type": "meeting", "output_text": output_text,
-            "cache_hit": False, "llm_model_used": llm.model}
+            "cache_hit": False, "llm_model_used": llm.model, "analysis_data": data}
 
 
 async def _tool_analyze_interview(
@@ -264,7 +265,7 @@ async def _tool_analyze_interview(
     logger.info("[Tool] analyze_interview 完成")
     return {"rec_type": "interview", "output_text": a_md,
             "result_path": str(report_path),
-            "cache_hit": False, "llm_model_used": actual_llm}
+            "cache_hit": False, "llm_model_used": actual_llm, "analysis_data": result_raw}
 
 
 async def _tool_analyze_general(
@@ -290,7 +291,7 @@ async def _tool_analyze_general(
                        llm_model=actual_llm)
     logger.info("[Tool] analyze_general 完成")
     return {"rec_type": rec_type, "output_text": output_text, "cache_hit": False,
-            "llm_model_used": actual_llm}
+            "llm_model_used": actual_llm, "analysis_data": data}
 
 
 # ═══════════════════════════════════════════════════════════════

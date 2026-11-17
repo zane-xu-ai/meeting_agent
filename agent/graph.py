@@ -69,6 +69,11 @@ class AgentState(TypedDict):
     llm_start: float                     # LLM 分析开始时间戳
     pipeline_start: float                 # 流水线开始时间戳
     error: str | None                    # 错误信息
+    source_asset: str
+    source_metadata: dict
+    analysis_data: dict
+    classification_data: dict
+    cleaned_transcript: Any
     clean_asr_cache_hit: bool
     asr_model_used: str                  # 实际使用的 ASR 模型 (fallback 后)
     llm_model_used: str                  # 实际使用的 LLM 模型 (fallback 后)
@@ -166,6 +171,10 @@ async def extract_audio(state: AgentState) -> dict:
 
             video_info = await get_video_info(source)
             if video_info:
+                updates["source_metadata"] = {
+                    key: video_info[key] for key in ("title", "description", "duration", "uploader", "upload_date")
+                    if key in video_info
+                }
                 title = video_info.get("title", "")
                 if title:
                     new_stem = sanitize_stem(title)
@@ -194,6 +203,8 @@ async def extract_audio(state: AgentState) -> dict:
         _notify(task_id, step="音频提取完成", progress=20,
                 step_idx=0, file_size=audio_file_size)
         updates["audio_path"] = str(audio_path)
+        if source_type == "url_video" and settings.database_url:
+            updates["source_asset"] = str(audio_path)
         return updates
 
     # 音频源: 无需提取
@@ -212,19 +223,19 @@ async def preprocess(state: AgentState) -> dict:
         from utils.media_network import download_public_audio
 
         _notify(task_id, step="正在下载远程音频...", progress=22, step_idx=1)
+        job_dir = settings.output_dir / "work" / task_id
+        job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         with TemporaryDirectory() as scratch:
-            target = Path(scratch) / "source.audio"
+            target = (job_dir if settings.database_url else Path(scratch)) / "source.audio"
             await asyncio.to_thread(download_public_audio, state["source"], target, settings.max_upload_bytes)
             from utils.audio import preprocess_audio
 
-            job_dir = settings.output_dir / "work" / task_id
-            job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             path, duration = await asyncio.to_thread(
                 preprocess_audio, target, settings.asr_sample_rate, job_dir / "audio.wav",
             )
         _notify(task_id, step="预处理完成，准备转写...", progress=35, step_idx=1,
                 audio_duration=round(duration, 1))
-        return {"preprocessed_path": str(path), "asr_input": str(path)}
+        return {"preprocessed_path": str(path), "asr_input": str(path), "source_asset": str(target)}
 
     audio_path = state.get("audio_path") or state["source"]
     _notify(task_id, step="正在预处理音频...", progress=22, step_idx=1)
@@ -239,7 +250,7 @@ async def preprocess(state: AgentState) -> dict:
         f"[任务 {task_id}] 预处理完成: {preprocessed.name}, 时长 {audio_duration:.1f}s")
 
     # 清理提取的临时音频文件 (视频路径)
-    if state.get("audio_path"):
+    if state.get("audio_path") and not state.get("source_asset"):
         try:
             Path(state["audio_path"]).unlink()
         except Exception:
@@ -366,7 +377,7 @@ async def text_clean(state: AgentState) -> dict:
             step_idx=3, cleaned_sentences=cleaned_count)
     logger.info(f"[任务 {task_id}] 文本预处理完成：{cleaned_count} 句")
 
-    return {"transcript_text": cleaned_text}
+    return {"transcript_text": cleaned_text, "cleaned_transcript": cleaned}
 
 
 async def classify(state: AgentState) -> dict:
@@ -674,6 +685,8 @@ async def agent_loop(state: AgentState) -> dict:
     rec_type = "general"
     actual_llm_model_used = ""
     state_result_path = ""
+    analysis_data = {}
+    classification_data = {}
 
     try:
         for iteration in range(max_iterations):
@@ -749,6 +762,10 @@ async def agent_loop(state: AgentState) -> dict:
                     _notify(task_id, rec_type=rec_type, step_idx=4)
                 if "output_text" in tool_result:
                     output_text = tool_result["output_text"]
+                if "analysis_data" in tool_result:
+                    analysis_data = tool_result["analysis_data"]
+                if "classification_data" in tool_result:
+                    classification_data = tool_result["classification_data"]
                 if "result_path" in tool_result:
                     state_result_path = tool_result["result_path"]
                 if "llm_model_used" in tool_result:
@@ -788,6 +805,8 @@ async def agent_loop(state: AgentState) -> dict:
         "result_path": state_result_path or None,
         "llm_start": llm_start,
         "llm_model_used": actual_llm_model_used,
+        "analysis_data": analysis_data,
+        "classification_data": classification_data,
     }
 
 
@@ -882,7 +901,7 @@ async def _fallback_analyze(
         llm_dur = time.time() - llm_start
         _notify(task_id, step="会议分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
-        return {"output_text": output_text, "llm_model_used": llm.model}
+        return {"output_text": output_text, "llm_model_used": llm.model, "analysis_data": data}
 
     # ── 面试 ──
     if rec_type == "interview":
@@ -920,12 +939,14 @@ async def _fallback_analyze(
         _notify(task_id, step="面试分析完成", progress=90,
                 step_idx=5, llm_duration=round(llm_dur, 1))
         return {"output_text": a_md, "result_path": str(report_path),
-                "llm_model_used": actual_llm_model}
+                "llm_model_used": actual_llm_model, "analysis_data": result_raw}
 
     # ── 通用 / 视频 ──
     from agent.pipeline import analyze_general, format_general_result
     from agent.cache import load_summary_cache, save_summary_cache
 
+    data = {}
+    actual_llm = ""
     cached = load_summary_cache(audio_stem, rec_type=rec_type)
     if cached is not None:
         output_text = cached
@@ -960,6 +981,7 @@ async def _fallback_analyze(
         else:
             # 传统非流式调用
             result_general = await analyze_general(transcript_text, llm_model=llm_model)
+            data = result_general
             actual_llm = result_general.get(
                 "llm_model_used", settings.llm_models[0])
             output_text = format_general_result(
@@ -971,7 +993,7 @@ async def _fallback_analyze(
         _notify(task_id, step="通用分析完成", progress=90,
                 step_idx=5, cache_hit=False, llm_duration=round(llm_dur, 1))
 
-    return {"output_text": output_text, "llm_model_used": actual_llm}
+    return {"output_text": output_text, "llm_model_used": actual_llm, "analysis_data": data}
 
 
 # ═══════════════════════════════════════════════════════════════

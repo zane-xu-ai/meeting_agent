@@ -17,7 +17,7 @@ from urllib.parse import quote, urlsplit
 
 from loguru import logger
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -27,6 +27,7 @@ from agent.memory import get_memory_manager
 from agent.quota import QuotaManager
 from utils.ingress import RequestLimit, authorized, save_upload
 from utils.media_network import UnsafeMediaURL, validate_media_url
+from persistence.repository import public_state, repository
 
 # M5: 长期记忆 (向量检索)
 from agent.embedding import get_embedding_client
@@ -171,13 +172,35 @@ def _validate_models(asr_model, llm_model):
 
 
 def _new_task_id() -> str:
-    return uuid.uuid4().hex[:12]
+    return uuid.uuid4().hex
+
+
+def _read_task(task_id):
+    repo = repository()
+    task = repo.task(task_id) if repo else tasks.get(task_id)
+    if task is None:
+        raise HTTPException(404, "任务不存在")
+    return task
 
 
 def _update(task_id: str, **kw):
-    with tasks_lock:
-        if task_id in tasks:
-            tasks[task_id].update(kw)
+    repo = repository()
+    if repo:
+        repo.update(task_id, kw)
+    else:
+        with tasks_lock:
+            if task_id in tasks:
+                tasks[task_id].update(kw)
+
+
+def _register_task(state, location, asr_model, llm_model, *, modified_ms=None, batch_id=None):
+    repo = repository()
+    if repo:
+        repo.create(state, location, {"asr_model": asr_model, "llm_model": llm_model},
+                    modified_ms=modified_ms, batch_id=batch_id)
+    else:
+        with tasks_lock:
+            tasks[state["task_id"]] = state
 
 
 # ── Graph-based Processing ───────────────────────────────────
@@ -358,14 +381,18 @@ def _process(task_id: str, source: str, source_type: str,
             "error": None,
         }
 
-        invoke_pipeline(initial_state)
-        _update(task_id, status="completed", progress=100, step="分析完成")
+        result = invoke_pipeline(initial_state)
+        repo = repository()
+        if repo:
+            repo.record_result(task_id, result, _read_task(task_id))
+        else:
+            _update(task_id, status="completed", progress=100, step="分析完成")
         logger.info(f"[任务 {task_id}] 处理完成")
 
         # M5: 后台线程索引到向量库 (独立线程 + 独立 event loop)
         if settings.enable_vector_store:
             import threading
-            task_data = dict(tasks.get(task_id, {}))
+            task_data = dict(_read_task(task_id))
 
             def _run_index():
                 import asyncio
@@ -412,6 +439,7 @@ async def upload_file(
     file: UploadFile = File(...),
     asr_model: str | None = None,
     llm_model: str | None = None,
+    modified_ms: int | None = None,
 ):
     """上传音视频文件，创建后台处理任务"""
     # M10: 配额检查
@@ -454,22 +482,23 @@ async def upload_file(
         task_dir.rmdir()
         raise HTTPException(429, "今日任务数量已达上限")
 
-    with tasks_lock:
-        tasks[task_id] = {
-            "task_id": task_id,
-            "status": "processing",
-            "progress": 5,
-            "step": "任务已创建",
-            "error": None,
-            "result_path": None,
-            "asr_result_path": None,
-            "filename": original_name,
-            "file_type": file_type,
-            "video_title": None,
-            "source_type": source_type,
-            "file_size": size,
-            "content_sha256": digest,
-        }
+    state = {
+        "task_id": task_id,
+        "status": "processing",
+        "progress": 5,
+        "step": "任务已创建",
+        "error": None,
+        "result_path": None,
+        "asr_result_path": None,
+        "filename": original_name,
+        "file_type": file_type,
+        "video_title": None,
+        "source_type": source_type,
+        "file_size": size,
+        "content_sha256": digest,
+    }
+    await asyncio.to_thread(_register_task, state, str(file_path), asr_model, llm_model,
+                            modified_ms=modified_ms)
 
     threading.Thread(
         target=_process,
@@ -521,21 +550,21 @@ async def submit_url(request: Request, req: UrlRequest):
     if not quota_manager.record_usage(client_ip, task_id):
         raise HTTPException(429, "今日任务数量已达上限")
 
-    with tasks_lock:
-        tasks[task_id] = {
-            "task_id": task_id,
-            "status": "processing",
-            "progress": 5,
-            "step": "任务已创建",
-            "error": None,
-            "result_path": None,
-            "asr_result_path": None,
-            "filename": display_name,
-            "file_type": file_type,
-            "video_title": None,
-            "source_type": source_type,
-            "file_size": 0,
-        }
+    state = {
+        "task_id": task_id,
+        "status": "processing",
+        "progress": 5,
+        "step": "任务已创建",
+        "error": None,
+        "result_path": None,
+        "asr_result_path": None,
+        "filename": display_name,
+        "file_type": file_type,
+        "video_title": None,
+        "source_type": source_type,
+        "file_size": 0,
+    }
+    await asyncio.to_thread(_register_task, state, url, req.asr_model, req.llm_model)
 
     threading.Thread(
         target=_process,
@@ -550,9 +579,7 @@ async def submit_url(request: Request, req: UrlRequest):
 @app.get("/api/status/{task_id}")
 async def get_status(task_id: str):
     """查询任务状态"""
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-    return tasks[task_id]
+    return public_state(await asyncio.to_thread(_read_task, task_id))
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -591,10 +618,7 @@ async def stream_task_output(task_id: str):
     - error: 错误 {"message": "..."}
     - heartbeat: 心跳 (每 15 秒)
     """
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-
-    task = tasks[task_id]
+    task = await asyncio.to_thread(_read_task, task_id)
 
     # 如果任务已完成，直接返回 SSE 格式的完成事件
     if task["status"] == "completed":
@@ -642,8 +666,9 @@ async def stream_task_output(task_id: str):
                     yield f"data: {json.dumps({'type': 'heartbeat', 'data': {'time': time.time()}})}\n\n"
 
                     # 检查任务是否已完成
-                    if tasks.get(task_id, {}).get("status") == "completed":
-                        result_path = tasks[task_id].get("result_path")
+                    latest = await asyncio.to_thread(_read_task, task_id)
+                    if latest.get("status") == "completed":
+                        result_path = latest.get("result_path")
                         if result_path and Path(result_path).exists():
                             content = Path(result_path).read_text(
                                 encoding="utf-8")
@@ -663,66 +688,96 @@ async def stream_task_output(task_id: str):
     )
 
 
-@app.get("/api/result/{task_id}")
-async def get_result(task_id: str):
-    """获取分析结果 (Markdown)"""
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-    task = tasks[task_id]
+async def _get_content(task_id, kind):
+    task = await asyncio.to_thread(_read_task, task_id)
     if task["status"] != "completed":
         raise HTTPException(400, "任务尚未完成")
-    rp = task.get("result_path")
-    if not rp or not Path(rp).exists():
+    repo = repository()
+    suffix = {"result": ".md", "questions": "-questions.md", "asr": "-asr.txt"}[kind]
+    if repo:
+        content = await asyncio.to_thread(repo.content, task_id, kind)
+        if content is not None:
+            return {"content": content, "filename": (task.get("filename") or task_id) + suffix}
+    key = "asr_result_path" if kind == "asr" else "result_path"
+    path = Path(task[key]) if task.get(key) else None
+    if path and kind == "questions":
+        path = path.with_name("question.md")
+    if not path or not path.is_file():
         raise HTTPException(404, "结果文件不存在")
-    text = Path(rp).read_text(encoding="utf-8")
-    return {"content": text, "filename": Path(rp).name}
+    return {"content": await asyncio.to_thread(path.read_text, encoding="utf-8"), "filename": path.name}
+
+
+@app.get("/api/result/{task_id}")
+async def get_result(task_id: str):
+    return await _get_content(task_id, "result")
 
 
 @app.get("/api/result/{task_id}/download")
 async def download_result(task_id: str):
-    """下载结果文件"""
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-    task = tasks[task_id]
-    if task["status"] != "completed":
-        raise HTTPException(400, "任务尚未完成")
-    rp = task.get("result_path")
-    if not rp or not Path(rp).exists():
-        raise HTTPException(404, "结果文件不存在")
-    text = Path(rp).read_text(encoding="utf-8")
-    return PlainTextResponse(text, media_type="text/markdown",
-                             headers={"Content-Disposition": _content_disposition(Path(rp).name)})
+    return await _download_content(task_id, "result")
 
 
 @app.get("/api/asr/{task_id}")
 async def get_asr_result(task_id: str):
-    """获取 ASR 转写结果"""
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-    task = tasks[task_id]
-    if task["status"] != "completed":
-        raise HTTPException(400, "任务尚未完成")
-    asr_path = task.get("asr_result_path")
-    if not asr_path or not Path(asr_path).exists():
-        raise HTTPException(404, "ASR 结果不存在")
-    text = Path(asr_path).read_text(encoding="utf-8")
-    return {"content": text, "filename": Path(asr_path).name}
+    return await _get_content(task_id, "asr")
 
 
 @app.get("/api/asr/{task_id}/download")
 async def download_asr_result(task_id: str):
-    """下载 ASR 转写结果"""
-    if task_id not in tasks:
+    return await _download_content(task_id, "asr")
+
+
+@app.get("/api/questions/{task_id}/download")
+async def download_questions(task_id: str):
+    return await _download_content(task_id, "questions")
+
+
+async def _download_content(task_id, kind):
+    result = await _get_content(task_id, kind)
+    return PlainTextResponse(result["content"], media_type="text/plain" if kind == "asr" else "text/markdown",
+                             headers={"Content-Disposition": _content_disposition(result["filename"])})
+
+
+def _history_repository():
+    repo = repository()
+    if not repo:
+        raise HTTPException(503, "尚未配置 PostgreSQL 历史存储")
+    return repo
+
+
+@app.get("/api/history")
+def list_history(limit: int = 30, cursor: str | None = None, status: str | None = None,
+                 category: str | None = None, search: str | None = None):
+    limit = min(100, max(1, limit))
+    position = None
+    if cursor:
+        try:
+            timestamp, task_id = cursor.rsplit("/", 1)
+            position = (datetime.fromisoformat(timestamp), task_id)
+        except ValueError as error:
+            raise HTTPException(422, "分页游标无效") from error
+    rows = _history_repository().history(limit, position, status=status, category=category, search=search)
+    next_cursor = None
+    if len(rows) > limit:
+        last = rows[limit - 1]
+        next_cursor = f"{last['created_at'].isoformat()}/{last['id']}"
+    return {"items": rows[:limit], "next_cursor": next_cursor}
+
+
+@app.get("/api/history/{task_id}")
+def history_detail(task_id: str):
+    result = _history_repository().detail(task_id)
+    if result is None:
         raise HTTPException(404, "任务不存在")
-    task = tasks[task_id]
-    if task["status"] != "completed":
-        raise HTTPException(400, "任务尚未完成")
-    asr_path = task.get("asr_result_path")
-    if not asr_path or not Path(asr_path).exists():
-        raise HTTPException(404, "ASR 结果不存在")
-    text = Path(asr_path).read_text(encoding="utf-8")
-    return PlainTextResponse(text, media_type="text/plain",
-                             headers={"Content-Disposition": _content_disposition(Path(asr_path).name)})
+    return result
+
+
+@app.get("/api/history/{task_id}/media")
+def history_media(task_id: str):
+    entry = _history_repository().media_file(task_id)
+    if not entry:
+        raise HTTPException(404, "媒体文件不存在")
+    return FileResponse(entry[0], media_type=entry[1] or "application/octet-stream")
 
 
 @app.get("/api/models")
@@ -822,9 +877,7 @@ CHAT_SYSTEM_PROMPT = """你是一个智能会议分析助手。用户刚刚完�
 @app.post("/api/chat/{task_id}")
 async def chat_with_task(task_id: str, req: ChatRequest):
     """基于已完成任务的分析结果进行多轮追问"""
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-    task = tasks[task_id]
+    task = await asyncio.to_thread(_read_task, task_id)
     if task["status"] != "completed":
         raise HTTPException(400, "任务尚未完成，无法追问")
 
@@ -940,9 +993,7 @@ async def chat_stream(task_id: str, req: ChatRequest):
 
     使用 SSE 流式输出 LLM 回答
     """
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
-    task = tasks[task_id]
+    task = await asyncio.to_thread(_read_task, task_id)
     if task["status"] != "completed":
         raise HTTPException(400, "任务尚未完成，无法追问")
 
@@ -1064,8 +1115,7 @@ async def chat_stream(task_id: str, req: ChatRequest):
 @app.get("/api/chat/{task_id}/history")
 async def get_chat_history(task_id: str):
     """获取任务的对话历史 (M4: 三层分级压缩)"""
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
+    await asyncio.to_thread(_read_task, task_id)
     mem_mgr = get_memory_manager()
     memory = mem_mgr.get_memory(task_id)
     return {
@@ -1092,8 +1142,7 @@ async def mark_milestone(task_id: str, req: MilestoneRequest):
     当一个子任务完成时调用 (如 "分析完成", "待办提取完成")
     将当前对话压缩为摘要，只保留最近的少量消息。
     """
-    if task_id not in tasks:
-        raise HTTPException(404, "任务不存在")
+    await asyncio.to_thread(_read_task, task_id)
     mem_mgr = get_memory_manager()
     milestone = mem_mgr.mark_milestone(task_id, req.label, req.summary)
     return {

@@ -41,7 +41,7 @@ CLASSIFY_PROMPT = """你是一个录音类型分类器。请根据以下转写�
 
 
 async def classify_recording(
-    transcript_text: str, llm_model: str | None = None,
+    transcript_text: str, llm_model: str | None = None, *, details: dict | None = None,
 ) -> str:
     """
     根据转写文本判断录音类型。
@@ -69,6 +69,8 @@ async def classify_recording(
             logger.warning(f"分类结果无效: {rec_type}，默认使用 general")
             rec_type = "general"
 
+        if details is not None:
+            details.update(model=llm.model, confidence=confidence, reason=data.get("reason"))
         logger.info(
             f"录音分类: {rec_type} (confidence={confidence})")
         return rec_type

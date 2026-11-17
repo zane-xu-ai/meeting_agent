@@ -109,6 +109,8 @@ class Settings(BaseSettings):
 
     # 本机部署默认通过 SSH 回环访问。
     workspace_token: str = ""
+    database_url: str = ""
+    media_storage_dir: Path = Path("./var/media")
     max_upload_bytes: int = Field(default=512 * 1024 * 1024, gt=0)
 
     # 输出

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分析历史 · Meeting Agent</title>
+<style>
+  :root{font-family:system-ui,sans-serif;color:#172235;background:#f5f7fa}
+  body{max-width:1150px;margin:2rem auto;padding:0 1rem}
+  nav,form,#stats,#downloads{display:flex;gap:.65rem;align-items:center;flex-wrap:wrap}
+  a{color:#3759ac} button,input,select{font:inherit;padding:.5rem;border:1px solid #bdc8da;border-radius:.4rem;background:white}
+  button{cursor:pointer} table{width:100%;border-collapse:collapse;margin:1rem 0;background:white}
+  th,td{padding:.7rem;border-bottom:1px solid #dde5f0;text-align:left}
+  article{background:white;padding:1rem;border:1px solid #dde5f0;border-radius:.6rem;margin-top:1.5rem}
+  pre{white-space:pre-wrap;word-break:break-word} progress{width:8rem}
+  [hidden]{display:none!important}
+</style>
+<nav><a href="/">返回会议助手</a></nav>
+<h1>分析历史</h1>
+<form id="filters">
+  <label>搜索 <input name="search" type="search" placeholder="标题、文件名或 URL"></label>
+  <label>类别 <select name="category"><option value="">全部</option><option value="meeting">会议</option><option value="interview">面试</option><option value="general">通用</option><option value="video">视频</option></select></label>
+  <label>状态 <select name="status"><option value="">全部</option><option value="completed">成功</option><option value="processing">执行中</option><option value="pending">待派发</option><option value="failed">失败</option><option value="cancelled">取消</option></select></label>
+  <button>筛选</button>
+</form>
+<p id="message" role="status"></p>
+<table><thead><tr><th>来源</th><th>提交</th><th>类别</th><th>状态</th><th>进度</th></tr></thead><tbody id="rows"></tbody></table>
+<button id="more" hidden>加载更多</button>
+<article id="detail" hidden>
+  <h2 id="title"></h2><p id="meta"></p><p id="stats"></p>
+  <video id="media" controls preload="none" hidden style="max-width:100%;max-height:320px"></video>
+  <p id="downloads"></p>
+  <details><summary>转写及说话人</summary><ol id="segments"></ol></details>
+  <details open><summary>分析报告</summary><pre id="report"></pre></details>
+  <details id="questionPanel" hidden><summary>逐题评分</summary><ol id="questions"></ol></details>
+</article>
+<script src="/history.js" defer></script>

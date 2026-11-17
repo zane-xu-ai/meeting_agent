@@ -87,15 +87,32 @@ def _run_graph_pipeline(
         register_result_handler,
         unregister_task,
     )
-    from server import _save_result
+    from persistence.repository import repository
+
+    repo = repository()
+    local = source_type.startswith("local_")
+    path = Path(source)
+    tasks = {"task_id": task_id, "status": "processing", "progress": 0,
+             "source_type": source_type, "filename": path.name if local else "在线媒体"}
+    if repo:
+        repo.create(tasks, source, {}, modified_ms=int(path.stat().st_mtime * 1000) if local else None)
+
+    def save_result(task, stem, subdir, content, asr_model=None, llm_model=None):
+        result_path = settings.output_dir / "summary" / subdir / f"{stem}_{asr_model}_{llm_model}.md"
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(content, encoding="utf-8")
+        tasks["result_path"] = str(result_path)
 
     # CLI 进度回调: 在终端打印步骤信息
     def cli_progress(step: str = "", progress: int = 0, **kw):
+        tasks.update(kw, step=step, progress=progress)
+        if repo:
+            repo.update(task_id, {**kw, "step": step, "progress": progress})
         if step:
             console.print(f"[dim]  [{progress:3d}%] {step}[/dim]")
 
     register_progress_cb(task_id, cli_progress)
-    register_result_handler(task_id, _save_result)
+    register_result_handler(task_id, save_result)
 
     initial_state = {
         "source": source,
@@ -103,7 +120,7 @@ def _run_graph_pipeline(
         "asr_model": None,
         "llm_model": None,
         "task_id": task_id,
-        "audio_stem": get_audio_stem(source),
+        "audio_stem": f"{get_audio_stem(source)[:40]}_{task_id}",
         "audio_path": None,
         "preprocessed_path": None,
         "asr_input": None,
@@ -118,14 +135,16 @@ def _run_graph_pipeline(
         "error": None,
     }
 
-    tasks: dict = {"status": "processing", "progress": 0}
-
     try:
-        invoke_pipeline(initial_state)
+        result = invoke_pipeline(initial_state)
+        if repo:
+            repo.record_result(task_id, result, tasks)
         tasks["status"] = "completed"
     except Exception as e:
         tasks["status"] = "failed"
         tasks["error"] = str(e)
+        if repo:
+            repo.update(task_id, {"status": "failed", "error": "处理失败", "error_code": type(e).__name__})
     finally:
         unregister_task(task_id)
 

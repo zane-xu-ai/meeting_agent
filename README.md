@@ -213,3 +213,11 @@ uploads/                          # Web 上传文件，按任务 ID 分目录
 ## License
 
 [MIT](LICENSE)
+
+### 启用 PostgreSQL 历史
+
+在 PostgreSQL 创建 `meeting_agent` 数据库及专用迁移/运行账号。迁移账号拥有数据库或可在其中创建 `meeting` schema。运行账号需要该 schema 的 USAGE、业务表 DML 和序列 USAGE。用私有配置设置迁移连接 `MIGRATION_DATABASE_URL`，执行 `uv run --locked alembic upgrade head`，再在项目 `.env` 设置运行账号的 `DATABASE_URL` 并重启。网页的「分析历史」可筛选任务并查看媒体、转写、报告和题目。
+
+旧文件先执行 `uv run --locked python -m persistence.legacy --root output` 查看导入数量，确认后加 `--apply`。仅唯一匹配的旧转写会关联报告，未知来源时间仍留空。
+
+隔离库迁移后设置 `TEST_DATABASE_URL` 可运行实际 PostgreSQL 验收。

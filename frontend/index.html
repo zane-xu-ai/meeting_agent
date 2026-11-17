@@ -1600,6 +1600,7 @@
 </head>
 
 <body>
+  <nav style="padding: .6rem 1rem"><a href="/history.html">分析历史</a></nav>
   <div id="app">
     <!-- Header -->
     <header class="header">
@@ -2346,6 +2347,7 @@
           const form = new FormData();
           form.append('file', file);
           const params = new URLSearchParams();
+          if (file.lastModified) params.append('modified_ms', file.lastModified);
           if (selectedAsrModel.value) params.append('asr_model', selectedAsrModel.value);
           if (selectedLlmModel.value) params.append('llm_model', selectedLlmModel.value);
           const qs = params.toString();
