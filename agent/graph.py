@@ -69,6 +69,7 @@ class AgentState(TypedDict):
     llm_start: float                     # LLM 分析开始时间戳
     pipeline_start: float                 # 流水线开始时间戳
     error: str | None                    # 错误信息
+    work_path: str
     source_asset: str
     source_metadata: dict
     analysis_data: dict
@@ -157,7 +158,7 @@ async def extract_audio(state: AgentState) -> dict:
     if source_type == "url_audio":
         from utils.media_network import download_public_audio
 
-        root = settings.output_dir / "work" / task_id
+        root = Path(state["work_path"]) if state.get("work_path") else settings.output_dir / "work" / task_id
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         target = root / "source.audio"
         target.unlink(missing_ok=True)
@@ -204,7 +205,7 @@ async def extract_audio(state: AgentState) -> dict:
                     download_progress=round(percent, 1))
 
         audio_path = await extract_audio_from_video(
-            source, filename_stem=filename_stem,
+            source, output_dir=Path(state["work_path"]) if state.get("work_path") else None, filename_stem=filename_stem,
             progress_cb=_dl_progress)
 
         logger.info(f"[任务 {task_id}] 音频提取完成: {audio_path.name}")
@@ -234,7 +235,7 @@ async def preprocess(state: AgentState) -> dict:
 
     from utils.audio import preprocess_audio
 
-    target_dir = settings.output_dir / "work" / task_id
+    target_dir = Path(state["work_path"]) if state.get("work_path") else settings.output_dir / "work" / task_id
     target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     preprocessed, audio_duration = await asyncio.to_thread(
         preprocess_audio, audio_path, settings.asr_sample_rate, target_dir / "audio.wav",
@@ -570,7 +571,7 @@ async def format_output(state: AgentState) -> dict:
         total_dur = time.time() - pipeline_start
         notify_kwargs["total_duration"] = round(total_dur, 1)
     if settings.database_url and state.get("transcript_text"):
-        root = settings.output_dir / "work" / task_id
+        root = Path(state["work_path"]) if state.get("work_path") else settings.output_dir / "work" / task_id
         root.mkdir(mode=0o700, parents=True, exist_ok=True)
         export = root / "transcript.txt"
         export.write_text(state["transcript_text"], encoding="utf-8")

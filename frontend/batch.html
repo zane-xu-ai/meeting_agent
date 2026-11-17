@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>批量任务 · Meeting Agent</title>
+<style>
+  body{font:1rem system-ui;max-width:1040px;margin:2rem auto;padding:0 1rem;color:#172235;background:#f5f7fa}
+  nav,form{display:flex;gap:1rem;flex-wrap:wrap}a{color:#3759ac}
+  form{flex-direction:column;align-items:flex-start} label{display:grid;gap:.4rem;width:100%;max-width:38rem}
+  textarea{font:inherit;padding:.6rem;border:1px solid #bdc8da;border-radius:.4rem}button{font:inherit;cursor:pointer}
+  table{width:100%;border-collapse:collapse;background:white;margin:1rem 0}
+  th,td{padding:.65rem;border-bottom:1px solid #dbe4f0;text-align:left}
+  progress{width:7rem} li{overflow-wrap:anywhere}
+</style>
+<nav><a href="/">返回会议助手</a><a href="/history.html">分析历史</a><a href="/cache.html">缓存管理</a></nav>
+<h1>批量音视频分析</h1>
+<form id="batchForm">
+  <label>选择文件 <input name="files" type="file" multiple accept="audio/*,video/*,.mkv,.flac"></label>
+  <label>URL（每行一个） <textarea name="urls" rows="5" placeholder="https://…"></textarea></label>
+  <label>ASR 模型 <select id="asr" name="asr_model"><option value="">自动</option></select></label>
+  <label>LLM 模型 <select id="llm" name="llm_model"><option value="">自动</option></select></label>
+  <button id="submit">提交批次</button>
+</form>
+<p id="message" role="status"></p>
+<ul id="rejections"></ul>
+<table><thead><tr><th>输入</th><th>任务状态</th><th>当前阶段</th><th>进度</th><th>操作</th></tr></thead><tbody id="tasks"></tbody></table>
+<script src="/batch.js" defer></script>

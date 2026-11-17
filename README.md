@@ -225,3 +225,9 @@ uploads/                          # Web 上传文件，按任务 ID 分目录
 ### 管理阶段缓存
 
 完成数据库迁移后打开「分析历史 → 缓存管理」。工作区有来源、预处理、ASR、清洗、分类、面试分段和最终分析七层，可各自关闭读取或写入，按任务创建时锁定策略。已完成的报告和转写仍可通过历史访问。失效操作撤销复用资格，缓存文件由后续磁盘回收流程处理。
+
+### 启用 RabbitMQ 与批量任务
+
+创建项目 RabbitMQ vhost，允许项目账号声明 `meeting.tasks`、`meeting.dlx` 和队列。运行数据库迁移，配置 `AMQP_URL` 以及可选的 `AMQP_WORKER_URL`。安装 `deploy/meeting-agent-dispatcher.service` 和 `deploy/meeting-agent-worker@.service` 到 `~/.config/systemd/user/`，执行 `systemctl --user daemon-reload`，启用 dispatcher 及 `meeting-agent-worker@io.service`、`@cpu.service`、`@cloud.service`。开发环境可分别运行 `uv run --locked python -m persistence.broker dispatcher|io|cpu|cloud`。
+
+页面「批量任务」支持最多 20 项混合提交，保留原有单项 API。RabbitMQ 不可用时已承诺的任务保存在 PostgreSQL，并在恢复后派发。失败任务可从已保存的上一阶段续跑。

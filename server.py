@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from loguru import logger
-from fastapi import FastAPI, File, UploadFile, HTTPException, Request
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -28,6 +28,7 @@ from agent.quota import QuotaManager
 from utils.ingress import RequestLimit, authorized, save_upload
 from utils.media_network import UnsafeMediaURL, validate_media_url
 from persistence.repository import public_state, repository
+from persistence import dispatch
 
 # M5: 长期记忆 (向量检索)
 from agent.embedding import get_embedding_client
@@ -197,7 +198,9 @@ def _register_task(state, location, asr_model, llm_model, *, modified_ms=None, b
     repo = repository()
     if repo:
         repo.create(state, location, {"asr_model": asr_model, "llm_model": llm_model},
-                    modified_ms=modified_ms, batch_id=batch_id)
+                    modified_ms=modified_ms, batch_id=batch_id, queued=dispatch.enabled())
+    elif dispatch.enabled():
+        raise HTTPException(503, "任务队列需要 PostgreSQL")
     else:
         with tasks_lock:
             tasks[state["task_id"]] = state
@@ -441,6 +444,10 @@ async def upload_file(
     llm_model: str | None = None,
     modified_ms: int | None = None,
 ):
+    return await _submit_upload(request, file, asr_model, llm_model, modified_ms)
+
+
+async def _submit_upload(request, file, asr_model=None, llm_model=None, modified_ms=None, batch_id=None):
     """上传音视频文件，创建后台处理任务"""
     # M10: 配额检查
     client_ip = get_client_ip(request)
@@ -497,21 +504,36 @@ async def upload_file(
         "file_size": size,
         "content_sha256": digest,
     }
-    await asyncio.to_thread(_register_task, state, str(file_path), asr_model, llm_model,
-                            modified_ms=modified_ms)
-
-    threading.Thread(
-        target=_process,
-        args=(task_id, str(file_path), source_type, original_name,
-              file_type, asr_model, llm_model, digest),
-        daemon=True,
-    ).start()
+    queued = dispatch.enabled()
+    if queued:
+        state.update(status="pending", progress=0, step="等待派发")
+    try:
+        await asyncio.to_thread(_register_task, state, str(file_path), asr_model, llm_model,
+                                modified_ms=modified_ms, batch_id=batch_id)
+    except Exception:
+        file_path.unlink(missing_ok=True)
+        task_dir.rmdir()
+        raise
+    if queued:
+        file_path.unlink()
+        task_dir.rmdir()
+    else:
+        threading.Thread(
+            target=_process,
+            args=(task_id, str(file_path), source_type, original_name,
+                  file_type, asr_model, llm_model, digest),
+            daemon=True,
+        ).start()
 
     return UploadResponse(task_id=task_id, filename=original_name, file_type=file_type)
 
 
 @app.post("/api/submit-url")
 async def submit_url(request: Request, req: UrlRequest):
+    return await _submit_url(request, req)
+
+
+async def _submit_url(request, req, batch_id=None):
     """提交音视频链接进行分析"""
     # M10: 配额检查
     client_ip = get_client_ip(request)
@@ -564,16 +586,92 @@ async def submit_url(request: Request, req: UrlRequest):
         "source_type": source_type,
         "file_size": 0,
     }
-    await asyncio.to_thread(_register_task, state, url, req.asr_model, req.llm_model)
+    queued = dispatch.enabled()
+    if queued:
+        state.update(status="pending", progress=0, step="等待派发")
+    await asyncio.to_thread(_register_task, state, url, req.asr_model, req.llm_model, batch_id=batch_id)
 
-    threading.Thread(
-        target=_process,
-        args=(task_id, url, source_type, display_name,
-              file_type, req.asr_model, req.llm_model),
-        daemon=True,
-    ).start()
+    if not queued:
+        threading.Thread(
+            target=_process,
+            args=(task_id, url, source_type, display_name, file_type, req.asr_model, req.llm_model),
+            daemon=True,
+        ).start()
 
     return {"task_id": task_id, "filename": display_name, "file_type": file_type}
+
+
+@app.post("/api/batches", status_code=202)
+async def submit_batch(
+    request: Request,
+    files: list[UploadFile] = File(default=[]),
+    urls: str = Form(default=""),
+    asr_model: str | None = Form(default=None),
+    llm_model: str | None = Form(default=None),
+):
+    repo = _queue_repository()
+    _validate_models(asr_model, llm_model)
+    links = [line.strip() for line in urls.splitlines() if line.strip()]
+    if not 1 <= len(files) + len(links) <= 20:
+        raise HTTPException(400, "每批可提交 1–20 个文件或链接")
+    from persistence.stage_cache import fingerprint
+    # Multipart files are spooled and seekable. Hash without loading all bytes into memory.
+    def file_digest(file):
+        import hashlib
+        result = hashlib.file_digest(file.file, "sha256").hexdigest()
+        file.file.seek(0)
+        return result
+    key = request.headers.get("idempotency-key")
+    metadata = [[file.filename, await asyncio.to_thread(file_digest, file)] for file in files] if key else []
+    try:
+        batch, previous, created = await asyncio.to_thread(
+            dispatch.create_batch, repo, fingerprint([metadata, links, asr_model, llm_model]), key,
+        )
+    except ValueError as error:
+        raise HTTPException(409, str(error)) from error
+    if not created:
+        return previous or await asyncio.to_thread(dispatch.batch_status, repo, batch)
+
+    result = {"batch_id": str(batch), "accepted": [], "rejected": []}
+    for index, value in enumerate([*files, *links]):
+        try:
+            if isinstance(value, str):
+                item = await _submit_url(request, UrlRequest(url=value, asr_model=asr_model, llm_model=llm_model), batch)
+            else:
+                item = (await _submit_upload(request, value, asr_model, llm_model, batch_id=batch)).model_dump()
+            result["accepted"].append({"index": index, **item})
+        except HTTPException as error:
+            result["rejected"].append({"index": index, "detail": error.detail})
+    await asyncio.to_thread(dispatch.save_batch_receipt, repo, batch, result)
+    return result
+
+
+def _queue_repository():
+    if not dispatch.enabled():
+        raise HTTPException(503, "尚未启用 RabbitMQ 任务队列")
+    return _history_repository()
+
+
+@app.get("/api/batches/{batch_id}")
+def get_batch(batch_id: uuid.UUID):
+    value = dispatch.batch_status(_queue_repository(), batch_id)
+    if value is None:
+        raise HTTPException(404, "批次不存在")
+    return value
+
+
+@app.post("/api/status/{task_id}/cancel")
+def cancel_task(task_id: str):
+    if not dispatch.cancel(_queue_repository(), task_id):
+        raise HTTPException(409, "任务不存在或已结束")
+    return {"accepted": True}
+
+
+@app.post("/api/status/{task_id}/resume")
+def resume_task(task_id: str):
+    if not dispatch.resume(_queue_repository(), task_id):
+        raise HTTPException(409, "任务当前无法续跑")
+    return {"accepted": True}
 
 
 @app.get("/api/status/{task_id}")
@@ -607,7 +705,7 @@ async def get_quota(request: Request):
 
 
 @app.get("/api/stream/{task_id}")
-async def stream_task_output(task_id: str):
+async def stream_task_output(task_id: str, request: Request):
     """
     M9: SSE 流式输出任务结果
 
@@ -619,6 +717,11 @@ async def stream_task_output(task_id: str):
     - heartbeat: 心跳 (每 15 秒)
     """
     task = await asyncio.to_thread(_read_task, task_id)
+
+    if repository():
+        raw_cursor = request.headers.get("last-event-id", "0")
+        after = int(raw_cursor) if raw_cursor.isdecimal() and len(raw_cursor) < 19 else 0
+        return _history_event_stream(task_id, after)
 
     # 如果任务已完成，直接返回 SSE 格式的完成事件
     if task["status"] == "completed":
@@ -642,7 +745,6 @@ async def stream_task_output(task_id: str):
             )
 
     # 任务未完成或正在进行，创建流式队列
-    import asyncio
     from agent.graph import register_stream_queue, unregister_stream_queue
 
     queue = asyncio.Queue()
@@ -686,6 +788,37 @@ async def stream_task_output(task_id: str):
             "X-Accel-Buffering": "no",
         }
     )
+
+
+def _history_event_stream(task_id, after):
+    async def generate():
+        cursor = after
+        repo = repository()
+        heartbeat = time.monotonic()
+        while True:
+            events = await asyncio.to_thread(dispatch.events, repo, task_id, cursor)
+            for event in events:
+                cursor = event["seq"]
+                payload = json.dumps({"type": "status", "data": event["payload"]}, ensure_ascii=False)
+                yield f"id: {cursor}\ndata: {payload}\n\n"
+            if len(events) == 100:
+                continue
+            state = await asyncio.to_thread(_read_task, task_id)
+            if state["status"] in dispatch.TERMINAL:
+                if state["status"] == "completed":
+                    content = await asyncio.to_thread(repo.content, task_id, "result")
+                    payload = {"type": "done", "data": {"output_text": content or ""}}
+                else:
+                    payload = {"type": "error", "data": {"message": state.get("error") or state["status"]}}
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                return
+            if time.monotonic() - heartbeat > 15:
+                yield ": heartbeat\n\n"
+                heartbeat = time.monotonic()
+            await asyncio.sleep(1)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 async def _get_content(task_id, kind):

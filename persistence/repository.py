@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
@@ -102,7 +103,7 @@ class Repository:
     def _event(connection, job_id, kind, payload):
         connection.execute(insert(s.job_events).values(job_id=job_id, event_type=kind, payload=public_state(payload)))
 
-    def create(self, state, location, request_config, *, modified_ms=None, batch_id=None):
+    def create(self, state, location, request_config, *, modified_ms=None, batch_id=None, queued=False):
         local = state["source_type"].startswith("local") and location is not None
         filename = state.get("filename") if local or not location else None
         url = display_url(location) if location and not local else None
@@ -131,13 +132,17 @@ class Repository:
                 index_elements=["workspace_id", "identity"], set_={"updated_at": func.now()},
             ).returning(s.media_sources.c.id))
             version = self._version(connection, source_id, archived, filename) if archived else None
+            address = str(self.media_root / archived[1]) if queued and archived else location
             connection.execute(insert(s.analysis_jobs).values(
                 id=state["task_id"], workspace_id=PERSONAL, source_id=source_id,
-                media_version_id=version, status=state["status"], input_location=location,
+                media_version_id=version, status=state["status"], input_location=address,
                 state=state, request_config=request_config, batch_id=batch_id,
                 cache_policy_snapshot=policy_snapshot(connection),
             ))
             self._event(connection, state["task_id"], "status", state)
+            if queued:
+                from persistence.dispatch import enqueue
+                enqueue(connection, state["task_id"])
 
     def _version(self, connection, source_id, archive, filename=None, fields=None):
         checksum, key, size = archive
@@ -172,7 +177,7 @@ class Repository:
             connection.execute(update(s.analysis_jobs).where(s.analysis_jobs.c.id == job_id).values(**values))
             self._event(connection, job_id, "status", changes)
 
-    def record_result(self, job_id, result, state):
+    def record_result(self, job_id, result, state, *, connection=None):
         """Publish the transcript and the report together before exposing success."""
         source = result.get("source_asset") or (result.get("source") if state["source_type"].startswith("local") else None)
         source = Path(source) if source and Path(source).is_file() else None
@@ -190,7 +195,7 @@ class Repository:
 
         data = result.get("analysis_data", {})
         scoring = data.get("a_data", data)
-        with self.engine.begin() as connection:
+        with (self.engine.begin() if connection is None else nullcontext(connection)) as connection:
             job = connection.execute(select(s.analysis_jobs).where(s.analysis_jobs.c.id == job_id).with_for_update()).mappings().one()
             if job["status"] == "completed":
                 return

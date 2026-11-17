@@ -1,0 +1,13 @@
+[Unit]
+Description=Meeting Agent %i worker
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/projects/meeting_agent
+ExecStart=%h/projects/meeting_agent/.venv/bin/python -m persistence.broker %i
+UMask=0077
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
