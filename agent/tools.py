@@ -78,19 +78,13 @@ TOOL_SCHEMAS: list[dict] = [
         "function": {
             "name": "analyze_interview",
             "description": (
-                "分析面试录音转写文本，生成逐题评估报告。"
+                "读取当前录音的转写文本，生成逐题评估报告。"
                 "输出包含: 面试总结、综合评分、每题评分与推荐答案、改进建议。"
                 "仅在 classify_recording 判定为 interview 后调用。"
             ),
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "transcript": {
-                        "type": "string",
-                        "description": "面试转写文本",
-                    },
-                },
-                "required": ["transcript"],
+                "properties": {},
             },
         },
     },
@@ -189,7 +183,8 @@ async def _tool_classify_recording(
     """工具: 录音类型分类"""
     from agent.classifier import classify_recording
 
-    rec_type = await classify_recording(ctx.transcript_text)
+    rec_type = await classify_recording(
+        ctx.transcript_text, llm_model=ctx.llm_model)
     logger.info(f"[Tool] classify_recording → {rec_type}")
     return {"rec_type": rec_type}
 
@@ -201,10 +196,17 @@ async def _tool_analyze_meeting(
     from agent.llm_client import LLMClient
     from agent.prompts import MEETING_ANALYSIS_PROMPT
     from agent.pipeline import format_markdown
-    from agent.cache import save_summary_cache
+    from agent.cache import load_summary_cache, save_summary_cache
     from models.schemas import MeetingResult
 
     transcript = args.get("transcript", ctx.transcript_text)
+
+    # 检查缓存
+    cached = load_summary_cache(ctx.audio_stem, rec_type="meeting")
+    if cached is not None:
+        logger.info("[Tool] analyze_meeting 使用缓存")
+        return {"rec_type": "meeting", "output_text": cached, "cache_hit": True}
+
     llm = LLMClient(models=[ctx.llm_model] if ctx.llm_model else None)
 
     prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript)
@@ -217,7 +219,7 @@ async def _tool_analyze_meeting(
                        llm_model=llm.model)
     logger.info("[Tool] analyze_meeting 完成")
     return {"rec_type": "meeting", "output_text": output_text,
-            "llm_model_used": llm.model}
+            "cache_hit": False, "llm_model_used": llm.model}
 
 
 async def _tool_analyze_interview(
@@ -229,11 +231,24 @@ async def _tool_analyze_interview(
         format_interview_questions,
         format_interview_analysis,
     )
+    from agent.cache import load_interview_cache
     from config import settings
 
-    transcript = args.get("transcript", ctx.transcript_text)
+    # 检查面试缓存
+    asr_used = ctx.asr_model_used or settings.asr_models[0]
+    expected_llm = ctx.llm_model or settings.llm_models[0]
+    cached_interview = load_interview_cache(
+        ctx.audio_stem, asr_model=asr_used, llm_model=expected_llm)
+    if cached_interview is not None:
+        logger.info("[Tool] analyze_interview 使用缓存")
+        from pathlib import Path as _Path
+        return {"rec_type": "interview",
+                "output_text": cached_interview["analyze"],
+                "result_path": str(_Path(cached_interview["cache_dir"]) / "analyze.md"),
+                "cache_hit": True, "llm_model_used": expected_llm}
+
     result_raw = await analyze_interview(
-        transcript, llm_model=ctx.llm_model
+        ctx.transcript_text, llm_model=ctx.llm_model
     )
     actual_llm = result_raw.get("llm_model_used", "")
     q_md = format_interview_questions(
@@ -258,7 +273,8 @@ async def _tool_analyze_interview(
 
     logger.info("[Tool] analyze_interview 完成")
     return {"rec_type": "interview", "output_text": a_md,
-            "llm_model_used": actual_llm}
+            "result_path": str(result_dir / "analyze.md"),
+            "cache_hit": False, "llm_model_used": actual_llm}
 
 
 async def _tool_analyze_general(

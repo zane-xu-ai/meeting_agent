@@ -40,9 +40,15 @@ CLASSIFY_PROMPT = """你是一个录音类型分类器。请根据以下转写�
 """
 
 
-async def classify_recording(transcript_text: str) -> str:
+async def classify_recording(
+    transcript_text: str, llm_model: str | None = None,
+) -> str:
     """
     根据转写文本判断录音类型。
+
+    Args:
+        transcript_text: 转写文本
+        llm_model: 指定 LLM 模型，None 使用默认模型列表
 
     Returns:
         "meeting" | "interview" | "general"
@@ -50,7 +56,7 @@ async def classify_recording(transcript_text: str) -> str:
     # 截取前 3000 字符用于分类(避免 token 浪费)
     sample = transcript_text[:3000]
 
-    llm = LLMClient()
+    llm = LLMClient(models=[llm_model] if llm_model else None)
     prompt = CLASSIFY_PROMPT.format(transcript=sample)
 
     try:

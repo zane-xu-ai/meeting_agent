@@ -4,11 +4,22 @@ from __future__ import annotations
 
 import json
 import re
+from typing import cast
+from urllib.parse import urlsplit
 
 import httpx
 from loguru import logger
 
 from config import settings
+
+
+class LLMJSONError(ValueError):
+    """The model did not complete a usable JSON response."""
+
+    def __init__(self, finish_reason: str | None = None):
+        self.truncated = finish_reason == "length"
+        message = "LLM 的 JSON 输出达到长度上限，未能生成完整结果" if self.truncated else "LLM 输出无法解析为 JSON"
+        super().__init__(message)
 
 
 class LLMClient:
@@ -44,40 +55,77 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 4096,
     ) -> str:
-        """
-        发送单轮对话请求，支持模型列表自动 fallback。
+        """发送单轮对话，按配置尝试模型并返回文本。"""
+        result = await self._chat(prompt, system, temperature, max_tokens)
+        return cast(str, result)
 
-        Args:
-            prompt: 用户 prompt
-            system: 系统 prompt
-            temperature: 温度参数
-            max_tokens: 最大输出 token 数
-
-        Returns:
-            模型输出文本
-        """
+    async def _chat(
+        self, prompt: str, system: str, temperature: float, max_tokens: int,
+        *, json_output: bool = False,
+    ) -> str | dict:
         last_error = None
         for model in self.models:
             self.model = model
-            try:
-                return await self._chat_with_model(prompt, system, temperature, max_tokens)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"LLM 模型 {model} 失败: {e}，尝试下一个...")
-                if model != self.models[-1]:
-                    continue
-                raise RuntimeError(
-                    f"所有 LLM 模型均失败。最后一个错误 ({model}): {last_error}"
-                ) from last_error
+            budget = max_tokens
+            timeout_retried = False
+            use_json_mode = json_output
+            while True:
+                try:
+                    choice = await self._chat_with_model(
+                        prompt, system, temperature, budget,
+                        use_json_mode=use_json_mode, extend_timeout=timeout_retried,
+                    )
+                    content = choice["message"].get("content")
+                    if not json_output:
+                        return content
+                    if choice.get("finish_reason") == "length":
+                        raise LLMJSONError("length")
+                    return self._extract_json(content)
+                except LLMJSONError as error:
+                    last_error = error
+                    if error.truncated and budget < 16384:
+                        budget = min(budget * 2, 16384)
+                        logger.warning(f"LLM {model} 的 JSON 输出被截断，以 max_tokens={budget} 重试")
+                        continue
+                    break
+                except httpx.HTTPStatusError as error:
+                    last_error = error
+                    # 部分兼容接口仅支持通过提示词约束 JSON。
+                    if (use_json_mode and error.response.status_code in (400, 422)
+                            and "response_format" in error.response.text.lower()):
+                        use_json_mode = False
+                        logger.info(f"LLM {model} 不接受 response_format，改用提示词约束 JSON")
+                        continue
+                    break
+                except httpx.TimeoutException as error:
+                    last_error = error
+                    if not timeout_retried:
+                        timeout_retried = True
+                        logger.warning(f"LLM 模型 {model} 超时，延长超时后重试")
+                        continue
+                    break
+                except Exception as error:
+                    last_error = error
+                    break
+            logger.warning(f"LLM 模型 {model} 失败: {last_error}")
+        if isinstance(last_error, LLMJSONError):
+            raise last_error
+        raise RuntimeError(
+            f"所有 LLM 模型均失败。最后一个错误 ({self.model}): {last_error}"
+        ) from last_error
+
+    def _reasoning_options(self) -> dict:
+        host = urlsplit(self.base_url).hostname or ""
+        if self.model == "glm-5.3" and (
+            host == "dashscope.aliyuncs.com" or host.endswith(".maas.aliyuncs.com")
+        ):
+            return {"reasoning_effort": "low"}
+        return {}
 
     async def _chat_with_model(
-        self,
-        prompt: str,
-        system: str,
-        temperature: float,
-        max_tokens: int,
-    ) -> str:
-        """使用当前 self.model 执行单次对话"""
+        self, prompt: str, system: str, temperature: float, max_tokens: int,
+        *, use_json_mode: bool, extend_timeout: bool,
+    ) -> dict:
         payload = {
             "model": self.model,
             "messages": [
@@ -86,16 +134,18 @@ class LLMClient:
             ],
             "temperature": temperature,
             "max_tokens": max_tokens,
+            **self._reasoning_options(),
         }
+        if use_json_mode:
+            payload["response_format"] = {"type": "json_object"}
 
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-
-        # 根据 max_tokens 动态计算超时 (基础60s + 每4096 tokens额外60s)
-        timeout = 60.0 + (max_tokens / 4096) * 60.0
-        timeout = max(timeout, 120.0)  # 最少 120s
+        timeout = max(60.0 + (max_tokens / 4096) * 60.0, 120.0)
+        if extend_timeout:
+            timeout *= 2
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(f"调用 LLM: {self.model}")
@@ -103,13 +153,14 @@ class LLMClient:
             resp.raise_for_status()
             result = resp.json()
 
-        content = result["choices"][0]["message"]["content"]
+        choice = result["choices"][0]
         usage = result.get("usage", {})
         logger.info(
-            f"LLM 响应: model={self.model}, prompt_tokens={usage.get('prompt_tokens', '?')}, "
+            f"LLM 响应: model={self.model}, finish_reason={choice.get('finish_reason')}, "
+            f"prompt_tokens={usage.get('prompt_tokens', '?')}, "
             f"completion_tokens={usage.get('completion_tokens', '?')}"
         )
-        return content
+        return choice
 
     async def chat_messages(
         self,
@@ -133,22 +184,37 @@ class LLMClient:
         last_error = None
         for model in self.models:
             self.model = model
-            try:
-                return await self._chat_messages_with_model(messages, temperature, max_tokens)
-            except Exception as e:
-                last_error = e
-                logger.warning(f"LLM 模型 {model} (messages) 失败: {e}，尝试下一个...")
-                if model != self.models[-1]:
-                    continue
-                raise RuntimeError(
-                    f"所有 LLM 模型 (messages) 均失败。最后一个错误 ({model}): {last_error}"
-                ) from last_error
+            timeout_override: float | None = None
+            for attempt in range(2):
+                try:
+                    return await self._chat_messages_with_model(
+                        messages, temperature, max_tokens,
+                        timeout_override=timeout_override)
+                except httpx.TimeoutException:
+                    if attempt == 0:
+                        timeout_override = 60.0 + (max_tokens / 4096) * 60.0
+                        timeout_override = max(timeout_override, 120.0) * 2
+                        logger.warning(
+                            f"LLM 模型 {model} (messages) 超时，"
+                            f"以 timeout={timeout_override:.0f}s 重试...")
+                        continue
+                    last_error = httpx.TimeoutException(f"请求超时 (已重试)")
+                except Exception as e:
+                    last_error = e
+                    break
+            logger.warning(f"LLM 模型 {model} (messages) 失败: {last_error}，尝试下一个...")
+            if model != self.models[-1]:
+                continue
+            raise RuntimeError(
+                f"所有 LLM 模型 (messages) 均失败。最后一个错误 ({model}): {last_error}"
+            ) from last_error
 
     async def _chat_messages_with_model(
         self,
         messages: list[dict],
         temperature: float,
         max_tokens: int,
+        timeout_override: float | None = None,
     ) -> str:
         """使用当前 self.model 发送多轮对话"""
         payload = {
@@ -163,9 +229,12 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        # 根据 max_tokens 动态计算超时 (基础60s + 每4096 tokens额外60s)
-        timeout = 60.0 + (max_tokens / 4096) * 60.0
-        timeout = max(timeout, 120.0)  # 最少 120s
+        if timeout_override is not None:
+            timeout = timeout_override
+        else:
+            # 根据 max_tokens 动态计算超时 (基础60s + 每4096 tokens额外60s)
+            timeout = 60.0 + (max_tokens / 4096) * 60.0
+            timeout = max(timeout, 120.0)  # 最少 120s
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(
@@ -211,18 +280,31 @@ class LLMClient:
         last_error = None
         for model in self.models:
             self.model = model
-            try:
-                return await self._chat_with_model_tools(
-                    messages, tools, temperature, max_tokens, tool_choice
-                )
-            except Exception as e:
-                last_error = e
-                logger.warning(f"LLM 模型 {model} (tools) 失败: {e}，尝试下一个...")
-                if model != self.models[-1]:
-                    continue
-                raise RuntimeError(
-                    f"所有 LLM 模型 (tools) 均失败。最后一个错误 ({model}): {last_error}"
-                ) from last_error
+            timeout_override: float | None = None
+            for attempt in range(2):
+                try:
+                    return await self._chat_with_model_tools(
+                        messages, tools, temperature, max_tokens, tool_choice,
+                        timeout_override=timeout_override
+                    )
+                except httpx.TimeoutException:
+                    if attempt == 0:
+                        timeout_override = 60.0 + (max_tokens / 4096) * 60.0
+                        timeout_override = max(timeout_override, 120.0) * 2
+                        logger.warning(
+                            f"LLM 模型 {model} (tools) 超时，"
+                            f"以 timeout={timeout_override:.0f}s 重试...")
+                        continue
+                    last_error = httpx.TimeoutException(f"请求超时 (已重试)")
+                except Exception as e:
+                    last_error = e
+                    break
+            logger.warning(f"LLM 模型 {model} (tools) 失败: {last_error}，尝试下一个...")
+            if model != self.models[-1]:
+                continue
+            raise RuntimeError(
+                f"所有 LLM 模型 (tools) 均失败。最后一个错误 ({model}): {last_error}"
+            ) from last_error
 
     async def _chat_with_model_tools(
         self,
@@ -231,6 +313,7 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
         tool_choice: str,
+        timeout_override: float | None = None,
     ) -> dict:
         """使用当前 self.model 执行带 tools 的对话"""
         payload = {
@@ -238,6 +321,7 @@ class LLMClient:
             "messages": messages,
             "tools": tools,
             "tool_choice": tool_choice,
+            **self._reasoning_options(),
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
@@ -247,7 +331,14 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        if timeout_override is not None:
+            timeout = timeout_override
+        else:
+            # 根据 max_tokens 动态计算超时 (与 _chat_with_model 保持一致)
+            timeout = 60.0 + (max_tokens / 4096) * 60.0
+            timeout = max(timeout, 120.0)  # 最少 120s
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(f"调用 LLM (tools): {self.model}, tools={len(tools)}")
             resp = await client.post(self.chat_url, json=payload, headers=headers)
             resp.raise_for_status()
@@ -323,7 +414,11 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # 根据 max_tokens 动态计算超时 (基础60s + 每4096 tokens额外60s)
+        timeout = 60.0 + (max_tokens / 4096) * 60.0
+        timeout = max(timeout, 120.0)  # 最少 120s
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(f"调用 LLM (stream): {self.model}")
             async with client.stream("POST", self.chat_url, json=payload, headers=headers) as resp:
                 resp.raise_for_status()
@@ -400,7 +495,11 @@ class LLMClient:
             "Content-Type": "application/json",
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # 根据 max_tokens 动态计算超时
+        timeout = 60.0 + (max_tokens / 4096) * 60.0
+        timeout = max(timeout, 120.0)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
             logger.debug(
                 f"调用 LLM (messages stream): {self.model}, turns={len(messages)}")
             async with client.stream("POST", self.chat_url, json=payload, headers=headers) as resp:
@@ -430,44 +529,30 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 4096,
     ) -> dict:
-        """
-        发送对话请求并解析 JSON 输出。
-
-        会自动从模型输出中提取 JSON 块(支持 markdown code block 包裹)。
-        """
-        content = await self.chat(
-            prompt=prompt,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-        return self._extract_json(content)
+        """请求 JSON 对象。按模型回退，只在明确截断时增加输出额度。"""
+        result = await self._chat(prompt, system, temperature, max_tokens, json_output=True)
+        return cast(dict, result)
 
     @staticmethod
-    def _extract_json(text: str) -> dict:
-        """从模型输出中提取 JSON(支持 markdown code block)"""
-        # 尝试直接解析
+    def _extract_json(text: str | None) -> dict:
+        """解析 JSON 对象，兼容 Markdown 代码块和外围说明文字。"""
+        if not isinstance(text, str) or not text.strip():
+            raise LLMJSONError()
         try:
-            return json.loads(text)
+            data = json.loads(text)
         except json.JSONDecodeError:
-            pass
-
-        # 尝试从 ```json ... ``` 中提取
-        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # 尝试找到第一个 { 和最后一个 } 之间的内容
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
-                return json.loads(text[start: end + 1])
-            except json.JSONDecodeError:
-                pass
-
-        logger.warning(f"无法从 LLM 输出中解析 JSON，原始输出:\n{text[:500]}")
-        raise ValueError("LLM 输出无法解析为 JSON")
+            blocks = re.findall(r"```(?:json)?\s*(.*?)```", text, re.DOTALL | re.IGNORECASE)
+            start, end = text.find("{"), text.rfind("}")
+            if 0 <= start < end:
+                blocks.append(text[start:end + 1])
+            for block in blocks:
+                try:
+                    data = json.loads(block)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(data, dict):
+                    return data
+        else:
+            if isinstance(data, dict):
+                return data
+        raise LLMJSONError()

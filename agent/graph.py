@@ -409,8 +409,20 @@ async def analyze_dispatch(state: AgentState) -> dict:
         from agent.llm_client import LLMClient
         from agent.prompts import MEETING_ANALYSIS_PROMPT
         from agent.pipeline import format_markdown
-        from agent.cache import save_summary_cache
+        from agent.cache import load_summary_cache, save_summary_cache
         from models.schemas import MeetingResult
+
+        # 检查 Summary 缓存
+        cached = load_summary_cache(audio_stem, rec_type="meeting")
+        if cached is not None:
+            logger.info(f"[任务 {task_id}] 使用 Summary 缓存 (meeting)")
+            _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
+                    step_idx=5, cache_hit=True, llm_duration=0)
+            return {
+                "output_text": cached,
+                "llm_start": llm_start,
+                "llm_model_used": "",
+            }
 
         llm = LLMClient(models=[llm_model] if llm_model else None)
         prompt = MEETING_ANALYSIS_PROMPT.format(transcript=transcript_text)
@@ -437,10 +449,28 @@ async def analyze_dispatch(state: AgentState) -> dict:
             format_interview_questions,
             format_interview_analysis,
         )
+        from agent.cache import load_interview_cache
         from pathlib import Path
 
+        # 检查面试缓存
+        asr_model_used = state.get("asr_model_used", settings.asr_models[0])
+        expected_llm = llm_model or settings.llm_models[0]
+        cached_interview = load_interview_cache(
+            audio_stem, asr_model=asr_model_used, llm_model=expected_llm)
+        if cached_interview is not None:
+            logger.info(f"[任务 {task_id}] 使用面试缓存 (interview)")
+            _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
+                    step_idx=5, cache_hit=True, llm_duration=0)
+            return {
+                "output_text": cached_interview["analyze"],
+                "result_path": str(Path(cached_interview["cache_dir"]) / "analyze.md"),
+                "llm_start": llm_start,
+                "llm_model_used": expected_llm,
+            }
+
         result_raw = await analyze_interview(transcript_text, llm_model=llm_model)
-        actual_llm_model = result_raw.get("llm_model_used", settings.llm_models[0])
+        actual_llm_model = result_raw.get(
+            "llm_model_used", settings.llm_models[0])
         q_md = format_interview_questions(
             result_raw["q_data"], None, timing_info)
         a_md = format_interview_analysis(
@@ -522,12 +552,14 @@ async def format_output(state: AgentState) -> dict:
 
     # 计算总耗时并发送完成通知 (所有分支统一处理)
     pipeline_start = state.get("pipeline_start", 0)
+    notify_kwargs: dict = dict(step="分析完成", progress=100, step_idx=6)
     if pipeline_start:
         total_dur = time.time() - pipeline_start
-        _notify(task_id, step="分析完成", progress=100,
-                step_idx=6, total_duration=round(total_dur, 1))
-    else:
-        _notify(task_id, step="分析完成", progress=100, step_idx=6)
+        notify_kwargs["total_duration"] = round(total_dur, 1)
+    # 将 result_path 传递到任务状态 (面试分支已在分析节点直接设置)
+    if state.get("result_path"):
+        notify_kwargs["result_path"] = state["result_path"]
+    _notify(task_id, **notify_kwargs)
 
     logger.info(f"[任务 {task_id}] 流水线执行完成")
     return {}
@@ -556,7 +588,7 @@ AGENT_SYSTEM_PROMPT = """你是一个智能会议分析 Agent。你的任务是�
 
 - 必须先分类，再分析，不可跳过任何一步
 - 分类依据内容特征判断，不要猜测
-- 将转写文本完整传给分析工具，不要截断
+- 面试分析工具直接读取当前转写，无需传参。其他分析工具按参数要求传入转写
 """
 
 
@@ -614,7 +646,7 @@ async def agent_loop(state: AgentState) -> dict:
 
     # 构建工具上下文
     tool_ctx = ToolContext(
-        transcript_text=transcript_text,
+        transcript_text=state["transcript_text"],
         audio_stem=state["audio_stem"],
         llm_model=llm_model,
         timing_info=timing_info,
@@ -633,6 +665,7 @@ async def agent_loop(state: AgentState) -> dict:
     output_text = ""
     rec_type = "general"
     actual_llm_model_used = ""
+    state_result_path = ""
 
     try:
         for iteration in range(max_iterations):
@@ -649,27 +682,45 @@ async def agent_loop(state: AgentState) -> dict:
 
             # ── 无 Tool 调用: LLM 给出最终响应 ──
             if not tool_calls:
-                content = response.get("content", "")
-                if output_text:
-                    # 已有分析工具结果，直接返回
-                    break
-                # LLM 未调用工具就返回了文本，降级到传统路径
-                logger.warning(f"[任务 {task_id}] LLM 未调用工具，降级到传统路由")
-                rec_type = await _fallback_classify(state)
-                _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
-                        step_idx=4, rec_type=rec_type)
-                result = await _fallback_analyze(state, rec_type, llm_start, timing_info)
-                result["rec_type"] = rec_type
-                result["llm_start"] = llm_start
-                return result
+                if not output_text:
+                    logger.warning(f"[任务 {task_id}] LLM 未调用工具，降级到传统路由")
+                break
 
             # ── 有 Tool 调用: 执行工具并继续循环 ──
             messages.append(response)  # assistant + tool_calls
 
             for tc in tool_calls:
                 fn_name = tc["function"]["name"]
-                fn_args = json.loads(tc["function"]["arguments"])
                 tc_id = tc["id"]
+
+                # 解析 tool call 参数 (容错: 模型可能输出多余 JSON)
+                try:
+                    fn_args = json.loads(tc["function"]["arguments"])
+                except json.JSONDecodeError as e:
+                    logger.warning(
+                        f"[任务 {task_id}] Tool {fn_name} 参数解析失败: {e}"
+                        f"，原始: {tc['function']['arguments'][:200]}")
+                    # 尝试提取第一个完整 JSON 对象
+                    raw_args = tc["function"]["arguments"]
+                    start = raw_args.find("{")
+                    end = raw_args.rfind("}")
+                    if start != -1 and end > start:
+                        try:
+                            fn_args = json.loads(raw_args[start:end + 1])
+                            logger.info(f"[任务 {task_id}] 从截断 JSON 中提取到参数")
+                        except json.JSONDecodeError:
+                            fn_args = {}
+                    else:
+                        fn_args = {}
+                    # 将解析错误反馈给模型，让其自我修正
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc_id,
+                        "content": json.dumps(
+                            {"error": f"参数解析失败: {e}，请重新调用 {fn_name}"},
+                            ensure_ascii=False),
+                    })
+                    continue
 
                 logger.info(
                     f"[任务 {task_id}] Tool Call: {fn_name}({list(fn_args.keys())})")
@@ -690,6 +741,8 @@ async def agent_loop(state: AgentState) -> dict:
                     _notify(task_id, rec_type=rec_type, step_idx=4)
                 if "output_text" in tool_result:
                     output_text = tool_result["output_text"]
+                if "result_path" in tool_result:
+                    state_result_path = tool_result["result_path"]
                 if "llm_model_used" in tool_result:
                     actual_llm_model_used = tool_result["llm_model_used"]
 
@@ -707,18 +760,15 @@ async def agent_loop(state: AgentState) -> dict:
                         llm_duration=round(time.time() - llm_start, 1))
                 break
         else:
-            # 达到最大迭代次数
             logger.warning(f"[任务 {task_id}] Agent 循环达到上限 ({max_iterations})")
-            if not output_text:
-                rec_type = await _fallback_classify(state)
-                result = await _fallback_analyze(state, rec_type, llm_start, timing_info)
-                result["rec_type"] = rec_type
-                result["llm_start"] = llm_start
-                return result
-
     except Exception as e:
         logger.error(f"[任务 {task_id}] Agent Loop 异常: {e}，降级到传统路由")
-        rec_type = await _fallback_classify(state)
+        output_text = ""
+
+    if not output_text:
+        rec_type = await _fallback_classify(state, llm_model=llm_model)
+        _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
+                step_idx=4, rec_type=rec_type)
         result = await _fallback_analyze(state, rec_type, llm_start, timing_info)
         result["rec_type"] = rec_type
         result["llm_start"] = llm_start
@@ -727,6 +777,7 @@ async def agent_loop(state: AgentState) -> dict:
     return {
         "rec_type": rec_type,
         "output_text": output_text,
+        "result_path": state_result_path or None,
         "llm_start": llm_start,
         "llm_model_used": actual_llm_model_used,
     }
@@ -735,7 +786,7 @@ async def agent_loop(state: AgentState) -> dict:
 # ── 降级函数: 传统分类 + 分析 (当 Tool Calling 失败时使用) ──
 
 
-async def _fallback_classify(state: AgentState) -> str:
+async def _fallback_classify(state: AgentState, llm_model: str | None = None) -> str:
     """降级分类: 使用传统 classifier.py (非 Tool Calling)"""
     task_id = state["task_id"]
     source_type = state["source_type"]
@@ -745,7 +796,8 @@ async def _fallback_classify(state: AgentState) -> str:
 
     _notify(task_id, step="正在识别录音类型...", progress=62, step_idx=4)
     from agent.classifier import classify_recording
-    rec_type = await classify_recording(state["transcript_text"])
+    rec_type = await classify_recording(
+        state["transcript_text"], llm_model=llm_model)
     logger.info(f"[任务 {task_id}] 降级分类结果: {rec_type}")
     _notify(task_id, step=f"分类完成: {rec_type}", progress=66,
             step_idx=4, rec_type=rec_type)
@@ -830,10 +882,26 @@ async def _fallback_analyze(
             analyze_interview, format_interview_questions,
             format_interview_analysis,
         )
+        from agent.cache import load_interview_cache
+
+        # 检查面试缓存
+        asr_model_used = state.get("asr_model_used", settings.asr_models[0])
+        expected_llm = llm_model or settings.llm_models[0]
+        cached_interview = load_interview_cache(
+            audio_stem, asr_model=asr_model_used, llm_model=expected_llm)
+        if cached_interview is not None:
+            logger.info(f"[任务 {task_id}] 使用面试缓存 (fallback interview)")
+            _notify(task_id, step="使用缓存，跳过 LLM 分析", progress=90,
+                    step_idx=5, cache_hit=True, llm_duration=0)
+            from pathlib import Path as _Path
+            return {"output_text": cached_interview["analyze"],
+                    "result_path": str(_Path(cached_interview["cache_dir"]) / "analyze.md"),
+                    "llm_model_used": expected_llm}
 
         result_raw = await analyze_interview(
             transcript_text, llm_model=llm_model)
-        actual_llm_model = result_raw.get("llm_model_used", settings.llm_models[0])
+        actual_llm_model = result_raw.get(
+            "llm_model_used", settings.llm_models[0])
         q_md = format_interview_questions(
             result_raw["q_data"], None, timing_info)
         a_md = format_interview_analysis(
@@ -891,8 +959,10 @@ async def _fallback_analyze(
         else:
             # 传统非流式调用
             result_general = await analyze_general(transcript_text, llm_model=llm_model)
-            actual_llm = result_general.get("llm_model_used", settings.llm_models[0])
-            output_text = format_general_result(result_general, None, timing_info)
+            actual_llm = result_general.get(
+                "llm_model_used", settings.llm_models[0])
+            output_text = format_general_result(
+                result_general, None, timing_info)
 
         save_summary_cache(output_text, audio_stem, rec_type=rec_type,
                            llm_model=actual_llm)

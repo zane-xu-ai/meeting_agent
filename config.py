@@ -58,6 +58,10 @@ class Settings(BaseSettings):
     )
 
     # M5: Embedding & Rerank
+    enable_vector_store: bool = Field(
+        default=False,
+        description="是否启用长期记忆 (向量检索/向量化索引)，默认关闭",
+    )
     embedding_model: str = Field(
         default="qwen3.7-text-embedding-flash",
         description="Embedding 模型名称",

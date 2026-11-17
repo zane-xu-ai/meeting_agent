@@ -1,0 +1,16 @@
+[Unit]
+Description=Meeting Agent Web
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+WorkingDirectory=%h/projects/meeting_agent
+ExecStart=%h/projects/meeting_agent/.venv/bin/python -m uvicorn server:app --host 127.0.0.1 --port 19090
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

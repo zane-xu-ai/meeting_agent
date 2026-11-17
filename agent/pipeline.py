@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from itertools import batched
 from pathlib import Path
 
 from loguru import logger
 
 from agent.asr_client import ASRClient
+from agent.context import get_context_manager
 from agent.llm_client import LLMClient
 from agent.prompts import (
     GENERAL_ANALYSIS_PROMPT,
@@ -205,22 +207,13 @@ async def analyze_interview(
     Returns:
         {"q_data": {...}, "a_data": {...}} 两份原始 JSON 数据
     """
-    from agent.text_processor import TextProcessor
-
     llm = LLMClient(models=[llm_model] if llm_model else None)
-    estimated_tokens = len(transcript_text) // 2
-
-    if estimated_tokens <= settings.max_tokens_per_chunk:
-        # 短文本: 直接整体分析
+    tokens = get_context_manager().count_tokens(transcript_text)
+    if tokens <= settings.max_tokens_per_chunk:
         result = await _interview_single(llm, transcript_text)
-        result["llm_model_used"] = llm.model
-        return result
-
-    # 长文本: 分段提取问题 + 合并分析
-    logger.info(
-        f"面试文本较长 (~{estimated_tokens} tokens)，采用分段提取策略"
-    )
-    result = await _interview_segmented(llm, transcript_text)
+    else:
+        logger.info(f"面试文本约 {tokens} tokens，采用分段提问提取和分批评分")
+        result = await _interview_segmented(llm, transcript_text)
     result["llm_model_used"] = llm.model
     return result
 
@@ -233,7 +226,7 @@ async def _interview_single(llm: LLMClient, transcript_text: str) -> dict:
 
     logger.info("面试分析 [2/2]: 逐题分析评分...")
     a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=transcript_text)
-    a_data = await llm.chat_json(a_prompt, max_tokens=16384)
+    a_data = await llm.chat_json(a_prompt)
 
     return {"q_data": q_data, "a_data": a_data}
 
@@ -244,10 +237,8 @@ async def _interview_segmented(llm: LLMClient, transcript_text: str) -> dict:
     1. 按句子边界切片，相邻片段重叠 3 句
     2. 每个片段分别提取问题
     3. 合并去重所有问题
-    4. 对合并后的问题列表统一分析
+    4. 按问题分批评分，每批保留完整转写作为上下文
     """
-    from agent.text_processor import TextProcessor
-
     processor = TextProcessor()
     chunks = processor.chunk_by_sentences(
         transcript_text, chunk_size=3000, overlap_sentences=3)
@@ -258,16 +249,12 @@ async def _interview_segmented(llm: LLMClient, transcript_text: str) -> dict:
     for i, chunk in enumerate(chunks):
         logger.info(f"面试分段提取 [片段 {i + 1}/{len(chunks)}]...")
         q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=chunk)
-        try:
-            q_data = await llm.chat_json(q_prompt)
-            for q in q_data.get("questions", []):
-                # 简单去重: 按问题文本前 20 字去重
-                q_key = q.get("question", "")[:20]
-                if q_key and q_key not in seen_questions:
-                    seen_questions.add(q_key)
-                    all_questions.append(q)
-        except Exception as e:
-            logger.warning(f"片段 {i + 1} 问题提取失败: {e}")
+        q_data = await llm.chat_json(q_prompt)
+        for q in q_data["questions"]:
+            q_key = q["question"][:20]
+            if q_key and q_key not in seen_questions:
+                seen_questions.add(q_key)
+                all_questions.append(q)
 
     if not all_questions:
         raise ValueError("所有分段均未提取到面试问题")
@@ -279,21 +266,60 @@ async def _interview_segmented(llm: LLMClient, transcript_text: str) -> dict:
     logger.info(f"合并去重后共 {len(all_questions)} 个问题")
     q_data = {"questions": all_questions}
 
-    # Step 2: 用合并后的问题列表 + 全文进行分析
-    # 将问题列表注入文本开头，引导 LLM 按问题顺序分析
-    question_list = "\n".join(
-        f"{i + 1}. {q['question']}" for i, q in enumerate(all_questions)
-    )
-    guided_transcript = (
-        f"## 已提取的面试问题列表\n{question_list}\n\n"
-        f"## 面试转写原文\n{transcript_text}"
-    )
+    analyses = []
+    summaries = []
+    for batch, questions in enumerate(batched(all_questions, 6), 1):
+        logger.info(f"面试分析 [2/2]: 评估问题批次 {batch}")
+        batch_items, batch_summaries = await _score_interview_batch(llm, transcript_text, questions)
+        analyses.extend(batch_items)
+        summaries.extend(batch_summaries)
 
-    logger.info("面试分析 [2/2]: 逐题分析评分...")
-    a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=guided_transcript)
-    a_data = await llm.chat_json(a_prompt, max_tokens=16384)
+    a_data = {
+        "overall_summary": "\n\n".join(summaries),
+        "overall_score": round(sum(item["score"] for item in analyses) / len(analyses)),
+        "question_analyses": analyses,
+    }
 
     return {"q_data": q_data, "a_data": a_data}
+
+
+async def _score_interview_batch(
+    llm: LLMClient, transcript: str, questions: tuple[dict, ...],
+) -> tuple[list[dict], list[str]]:
+    question_list = "\n".join(
+        f"{position}. {question['question']}" for position, question in enumerate(questions, 1)
+    )
+    prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=transcript)
+    prompt += (
+        f"\n\n只分析下列 {len(questions)} 个指定问题。每题单独评分，"
+        f"JSON 的 question_analyses 必须包含全部指定问题，id 对应本批序号：\n{question_list}"
+    )
+    try:
+        response = await llm.chat_json(prompt)
+        items = response["question_analyses"]
+        expected_ids = set(range(1, len(questions) + 1))
+        # 单题批次只有一种匹配方式，允许模型省略或重编号。
+        by_id = {1: items[0]} if len(questions) == len(items) == 1 else {
+            int(item["id"]): item for item in items
+        }
+        if set(by_id) != expected_ids or len(items) != len(questions):
+            raise ValueError("评分返回的问题编号或数量与本批输入不一致")
+        analyses = []
+        for position, question in enumerate(questions, 1):
+            item = by_id[position]
+            score = int(item["score"])
+            if not 0 <= score <= 100:
+                raise ValueError("评分超出 0–100")
+            analyses.append({**item, "id": question["id"], "question": question["question"], "score": score})
+        return analyses, [response["overall_summary"]]
+    except (KeyError, TypeError, ValueError) as error:
+        if len(questions) == 1:
+            raise ValueError(f"面试问题 Q{questions[0]['id']} 的评分结果不完整") from error
+        logger.warning(f"面试评分的 {len(questions)} 题批次返回不完整，拆分重试")
+        middle = len(questions) // 2
+        left, left_summaries = await _score_interview_batch(llm, transcript, questions[:middle])
+        right, right_summaries = await _score_interview_batch(llm, transcript, questions[middle:])
+        return left + right, left_summaries + right_summaries
 
 
 def format_interview_questions(

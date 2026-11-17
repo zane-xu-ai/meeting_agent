@@ -1,207 +1,213 @@
-# 会议助手智能体 (Meeting Agent)
+# 会议助手智能体（Meeting Agent）
 
-基于 ASR + LLM 的音视频内容分析智能体。支持会议录音、面试录音、通用录音和在线视频输入，自动输出结构化的会议纪要、面试评估报告或内容总结。
+基于 ASR、LLM 和 LangGraph 的音视频分析项目，支持本地文件和在线链接，生成会议纪要、面试分析或通用内容总结。提供 Typer 命令行和 FastAPI Web 服务，浏览器界面位于 `frontend/index.html`，无需单独构建前端。
 
-## 功能特性
+## 当前能力
 
-- **多类型录音自动分类** — 自动识别会议 / 面试 / 通用录音，路由到对应分析策略
-- **视频总结** — 支持本地视频文件和在线视频链接（YouTube、Bilibili 等 1000+ 站点）
-- **ASR 语音转写** — 基于阿里云百炼 Paraformer-v2，支持说话人分离和时间戳
-- **LLM 智能分析** — 基于通义千问系列模型，输出结构化 JSON 并格式化为 Markdown
-- **长文本滑动窗口** — 分段分析时相邻片段保留 3 句重叠，避免切割边界上下文丢失
-- **多级缓存** — ASR 结果和 Summary 结果均支持缓存，重复处理同一文件时秒级完成
-- **耗时追踪** — 记录 ASR 耗时、LLM 耗时、总耗时，写入总结文档
+- 音频转写：通过阿里云百炼 ASR 获取文本、时间戳和说话人信息，清洗语气词并合并短句。
+- 视频处理：使用 ffmpeg 提取本地视频音频，使用 yt-dlp 处理在线链接，并提供字幕提取逻辑；站点可用性取决于权限、cookies 和 yt-dlp 的支持情况。
+- 自动分析：通过工具调用识别 meeting / interview / general 类型，生成对应报告；工具调用异常时支持传统分类、分析路径降级。
+- 长文本处理：分段分析、重叠上下文、token 预算管理。
+- Web 交互：文件上传、链接提交、模型选择、任务进度、SSE 流式输出、结果预览和下载。
+- 对话与记忆：围绕单个任务追问、对话压缩和里程碑；可选 ChromaDB 长期记忆、Embedding 和 Rerank，以及跨任务问答。
+- 运维辅助：ASR / 总结文件缓存、按 IP 的每日任务配额、可选 LangSmith 追踪。
 
-## 处理流水线
+## 架构与处理流程
 
-```
-音频/视频输入
-    │
-    ├─ 视频 → yt-dlp 下载音频 / ffmpeg 提取音频
-    │
-    ├─ 音频预处理 → 单声道 16kHz WAV
-    │
-    ├─ ASR 转写 (Paraformer-v2) → 带时间戳和说话人标签的句子列表
-    │
-    ├─ 文本清洗 → 去语气词、合并短句、清理空白
-    │
-    ├─ 录音类型分类 (LLM) → meeting / interview / general
-    │
-    └─ LLM 分析 → 结构化 JSON → Markdown 输出
+CLI 和 Web 后台任务共用 `agent/graph.py` 的状态图：
+
+```text
+输入（本地音频 / 本地视频 / 音频 URL / 视频 URL）
+  → extract_audio：处理来源、提取音频或字幕
+  → preprocess：本地音频预处理
+  → asr_transcribe：语音转写及缓存
+  → text_clean：文本清洗
+  → agent_loop：分类与分析工具调用，异常时降级
+  → format_output：格式化并保存报告
 ```
 
-## 技术栈
+本地音频预处理使用单声道、默认 16 kHz WAV；远程音频可直接交给 ASR。Web 任务由后台线程执行，通过状态查询和 SSE 向页面返回进度。分析结果可按配置进入向量索引，供后续检索使用。
 
-| 组件 | 技术 |
-|------|------|
-| ASR | 阿里云百炼 Paraformer-v2 |
-| LLM | 通义千问 (qwen-plus / qwen3 系列) |
-| 视频下载 | yt-dlp (Python 模块) |
-| 音频处理 | ffmpeg + pydub |
-| HTTP | httpx (async) |
-| CLI | Typer + Rich |
-| 配置 | pydantic-settings + .env |
+## Ubuntu 部署与启动
 
-## 安装
+部署目录为 `~/projects/meeting_agent`，运行账户为 `zane`。现有 Ubuntu 已安装 uv、FFmpeg 和 FFprobe。新环境可按 [uv 安装说明](https://docs.astral.sh/uv/getting-started/installation/)安装 uv，系统命令可用 `sudo apt install ffmpeg curl iproute2 util-linux` 补齐。项目通过 `.python-version`、`pyproject.toml` 和 `uv.lock` 锁定 CPython 3.12.14 与依赖。
 
-### 1. 克隆项目
+从 Mac 同步源码时排除配置密钥和运行数据，然后登录 Ubuntu：
 
 ```bash
-git clone <repo-url>
-cd meeting_agent
+ssh ubuntu 'mkdir -p ~/projects/meeting_agent'
+rsync -av --exclude=.git --exclude=.env --exclude=.venv --exclude=data/ \
+  --exclude=logs/ --exclude=output/ --exclude=uploads/ --exclude=__pycache__/ \
+  --exclude=.idea --exclude=.qoder --exclude=.DS_Store --exclude='*.log' \
+  ./ ubuntu:projects/meeting_agent/
+ssh ubuntu
+cd ~/projects/meeting_agent
+test -f .env || install -m 600 .env.example .env
+./start.sh
 ```
 
-### 2. 创建 conda 环境
+首次启动会执行 `uv sync --locked`，自动安装匹配的 Python 和依赖，随后通过用户级 systemd 启动 Web 服务。脚本打印依赖同步、启动日志、HTTP 健康检查和服务状态。若部署账户未启用 linger，可执行 `loginctl enable-linger "$USER"`，使服务在 SSH 退出后继续运行并随系统启动。更新源码或修改配置后执行 `./start.sh restart`。
+
+本次使用 uv 0.13.7。若 Ubuntu 直连下载缓慢且原有代理可用，可用 `HTTPS_PROXY=http://127.0.0.1:17890 ./start.sh` 仅加速启动时的依赖下载。
+
+录音转写和分析前，在 Ubuntu 的 `.env` 中填写百炼账号的 `DASHSCOPE_API_KEY`。LLM 默认复用这个密钥。使用其他兼容服务时按需设置 `LLM_API_KEY`、`LLM_BASE_URL` 和 JSON 数组格式的 `LLM_MODELS`。`ASR_MODELS` 也使用 JSON 数组。旧配置中的单数 `LLM_MODEL` 应迁移成 `LLM_MODELS`。在线视频需要登录态时，可将 Netscape 格式 cookies 放到 `data/cookies/`。配置和 cookies 留在部署账户内。
+
+### 从 Mac 访问
+
+打开 [Meeting Agent](http://127.0.0.1:19190/)。Ubuntu 服务绑定 `127.0.0.1:19090`。本次在 Mac 当前登录会话通过 `launchctl` 保持 SSH 转发，可用 `launchctl remove local.meeting-agent.forward` 关闭。转发断开后，在 Mac 终端重新运行：
 
 ```bash
-conda create -n meeting_agent python=3.12 -y
-conda activate meeting_agent
+ssh -fNT -o ExitOnForwardFailure=yes -L 127.0.0.1:19190:127.0.0.1:19090 ubuntu
 ```
 
-### 3. 安装 Python 依赖
+健康检查位于 [`/api/health`](http://127.0.0.1:19190/api/health)。其中 `api_key_configured` 表示已填入百炼密钥，模型调用需以实际上传任务确认。
 
-```bash
-pip install -r requirements.txt
-```
+### 状态与日志
 
-### 4. 安装 ffmpeg (视频功能需要)
+| 命令 | 用途 |
+| --- | --- |
+| `./start.sh` | 启动并等待健康检查 |
+| `./start.sh status` | 查询 systemd 状态和健康接口 |
+| `./start.sh logs` | 查看最近 60 行启动、访问和应用日志 |
+| `./start.sh logs --follow` | 持续跟踪日志 |
+| `./start.sh restart` / `./start.sh stop` | 重启 / 停止 |
+| `logs/server_YYYY-MM-DD.log` | 应用 DEBUG 日志，按天轮转，保留 7 天 |
 
-```bash
-# macOS
-brew install ffmpeg
-
-# Ubuntu/Debian
-sudo apt install ffmpeg
-```
-
-### 5. 配置 API Key
-
-创建 `.env` 文件：
-
-```bash
-cp .env.example .env   # 或手动创建
-```
-
-编辑 `.env`，填入阿里云百炼 API Key：
-
-```env
-DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx
-```
-
-> API Key 获取地址：https://bailian.console.aliyun.com/
->
-> ASR 和 LLM 共用同一个 Key。如需单独配置 LLM Key，可额外设置 `LLM_API_KEY` 和 `LLM_BASE_URL`。
-
-### 6. 配置 Bilibili cookies (可选)
-
-下载 Bilibili 视频时，需要导出浏览器 cookies 以避免 412 反爬错误：
-
-1. 在 Chrome 中安装扩展 **"Get cookies.txt LOCALLY"**
-2. 打开 bilibili.com 并确保已登录
-3. 点击扩展图标 → 导出 cookies（Netscape 格式）
-4. 将文件保存到 `data/cookies/www.bilibili.com_cookies.txt`
+在 Mac 本地开发时，可从项目根目录运行 `uv sync --locked`，再运行 `uv run --locked uvicorn server:app --host 127.0.0.1 --port 9090`。
 
 ## 使用方式
 
-### 分析音频 (自动识别类型)
+### 命令行
 
 ```bash
-# 分析本地音频文件
-python main.py analyze /path/to/recording.wav
-
-# 分析远程音频 URL
-python main.py analyze "https://example.com/audio.mp3"
-
-# 输出 JSON 格式
-python main.py analyze recording.wav --output json
-
-# 显示详细日志
-python main.py analyze recording.wav -v
+uv run --locked python main.py analyze /path/to/recording.wav
+uv run --locked python main.py analyze "https://example.com/audio.mp3" -v
+uv run --locked python main.py video /path/to/video.mp4
+uv run --locked python main.py video "https://www.bilibili.com/video/BVxxxx/"
+uv run --locked python main.py transcript-only /path/to/recording.wav
 ```
 
-支持的音频格式：wav / mp3 / m4a / flac / ogg 等。
+`analyze` 和 `video` 支持 `-v` / `--verbose`；当前没有 `--output json` 选项。
 
-### 分析视频
+当前 CLI 的 `_run_graph_pipeline` 未将状态图返回的 `result_path` 写回其返回字典，因此报告可能已保存，但终端仍提示“未找到结果文件”；可检查 `output/summary/`，或使用 Web 界面查看结果。
+
+## 常用 API
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | `/api/upload` | multipart 文件上传；`file` 为文件字段，模型参数为查询参数 |
+| POST | `/api/submit-url` | JSON 提交 `url`，可带 `asr_model`、`llm_model` |
+| GET | `/api/status/{task_id}` | 任务状态、进度和元数据 |
+| GET | `/api/stream/{task_id}` | 任务 SSE 输出 |
+| GET | `/api/result/{task_id}` | 获取报告 |
+| GET | `/api/result/{task_id}/download` | 下载报告 |
+| GET | `/api/asr/{task_id}` | 获取转写文本 |
+| GET | `/api/asr/{task_id}/download` | 下载转写文本 |
+| POST | `/api/chat/{task_id}` | 任务对话，JSON 字段 `message` |
+| POST | `/api/chat/{task_id}/stream` | 流式任务对话 |
+| GET | `/api/chat/{task_id}/history` | 任务对话历史 |
+| POST | `/api/chat/{task_id}/milestone` | 标记对话里程碑 |
+| POST | `/api/global-chat`、`/api/global-chat/stream` | 全局问答及流式问答 |
+| GET / DELETE | `/api/global-chat/history` | 获取 / 清空指定会话历史 |
+| GET | `/api/models`、`/api/health`、`/api/quota` | 模型、健康检查和配额 |
+| GET | `/api/vector-store/stats` | 向量库统计 |
+
+提交链接示例（服务启动后执行）：
 
 ```bash
-# 分析本地视频
-python main.py video /path/to/video.mp4
-
-# 分析 Bilibili 视频
-python main.py video "https://www.bilibili.com/video/BV1xxxxxx/"
-
-# 分析 YouTube 视频
-python main.py video "https://www.youtube.com/watch?v=xxxxxxx"
+curl -X POST http://localhost:9090/api/submit-url \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://example.com/audio.mp3"}'
 ```
 
-支持 YouTube、Bilibili 等 1000+ 视频站点。视频总结结果以视频标题命名。
+## 配置参考
 
-### 仅 ASR 转写 (调试用)
+配置由 `config.py` 的 `Settings` 定义，从环境变量和根目录 `.env` 读取。
 
-```bash
-python main.py transcript-only /path/to/audio.wav
-```
+| 变量 | 默认值 | 用途 |
+| --- | --- | --- |
+| `DASHSCOPE_API_KEY` | 空 | ASR 密钥，也是 LLM 默认密钥来源 |
+| `LLM_API_KEY` | 复用百炼密钥 | 独立 LLM 密钥 |
+| `LLM_BASE_URL` | 百炼兼容接口地址 | LLM 服务地址 |
+| `LLM_MODELS` | 首项 `qwen3.7-flash-2026-07-15` | LLM 模型优先级列表 |
+| `ASR_MODELS` | 首项 `paraformer-v2` | ASR 模型优先级列表 |
+| `ASR_SAMPLE_RATE` | `16000` | 预处理采样率 |
+| `MAX_TOKENS_PER_CHUNK` | `6000` | 文本分片 token 预算 |
+| `MIN_SENTENCE_LENGTH` | `10` | 短句合并阈值 |
+| `OUTPUT_DIR` | `./output` | 转写和报告目录 |
+| `ENABLE_VECTOR_STORE` | `false` | 开启长期记忆索引与检索 |
+| `EMBEDDING_MODEL` | `qwen3.7-text-embedding-flash` | 向量模型 |
+| `RERANK_MODEL` | `qwen3.7-text-rerank` | 重排模型 |
+| `VECTOR_STORE_DIR` | `./data/vector_store` | ChromaDB 持久化位置 |
+| `DAILY_TASK_LIMIT` | `5` | 每个 IP 的每日任务上限 |
+| `QUOTA_WHITELIST_IPS` | `[]` | 不受配额限制的 IP，JSON 数组 |
+| `QUOTA_DATA_DIR` | `./data` | 配额数据目录 |
+| `LANGCHAIN_TRACING_V2` | `false` | 开启 LangSmith 追踪 |
+| `LANGSMITH_API_KEY` | 空 | LangSmith 密钥 |
+| `LANGCHAIN_PROJECT` | `meeting_agent` | 追踪项目名 |
+| `LANGSMITH_ENDPOINT` | `https://api.smith.langchain.com` | 追踪服务地址 |
 
-## 输出目录结构
+开启向量检索前需确认 Embedding 和 Rerank 模型可访问。服务端配额按 IP 统计，不是登录账号配额；反向代理部署时应控制可信的转发头。
 
-```
-output/
-├── asr/                                    # ASR 转写缓存
-│   └── {name}_{asr_model}.txt
-│
-└── summary/                                # 总结文档
-    ├── meeting/                            # 会议纪要
-    │   └── {name}_{asr}_{llm}.md
-    ├── interview/                          # 面试分析
-    │   └── {name}_{asr}_{llm}/
-    │       ├── question.md                 # 面试问题列表
-    │       └── analyze.md                  # 逐题分析报告
-    ├── video/                              # 视频总结
-    │   └── {title}_{asr}_{llm}.md
-    └── other/                              # 其他录音
-        └── {name}_{asr}_{llm}.md
-```
+## 项目目录
 
-## 配置项
-
-所有配置通过 `.env` 文件或环境变量设置：
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `DASHSCOPE_API_KEY` | (必填) | 阿里云百炼 API Key |
-| `LLM_API_KEY` | 同 DASHSCOPE_API_KEY | LLM 专用 API Key |
-| `LLM_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | LLM API 地址 |
-| `LLM_MODEL` | `qwen-plus` | LLM 模型名称 |
-| `ASR_MODEL` | `paraformer-v2` | ASR 模型名称 |
-| `ASR_SAMPLE_RATE` | `16000` | 音频采样率 |
-| `MAX_TOKENS_PER_CHUNK` | `6000` | 分段分析每片最大 token 数 |
-| `MIN_SENTENCE_LENGTH` | `10` | 短句合并阈值 (字符数) |
-| `OUTPUT_DIR` | `./output` | 输出目录 |
-
-## 项目结构
-
-```
+```text
 meeting_agent/
-├── main.py                 # CLI 入口 (analyze / video / transcript-only)
-├── config.py               # 配置管理
-├── requirements.txt
+├── main.py                 # Typer CLI
+├── server.py               # FastAPI、后台任务、SSE、对话与检索接口
+├── config.py               # Pydantic Settings
+├── pyproject.toml、uv.lock     # Python 版本约束和锁定依赖
+├── start.sh、deploy/         # Ubuntu 启动脚本和 systemd 用户服务
+├── frontend/index.html     # Web 界面
 ├── agent/
-│   ├── asr_client.py       # DashScope Paraformer ASR 客户端
-│   ├── llm_client.py       # LLM 客户端 (OpenAI 兼容接口)
-│   ├── pipeline.py         # 处理流水线编排
-│   ├── prompts.py          # Prompt 模板
-│   ├── classifier.py       # 录音类型分类
-│   ├── text_processor.py   # 文本清洗与分段 (含滑动窗口)
-│   ├── video_client.py     # 视频处理 (yt-dlp + ffmpeg)
-│   └── cache.py            # 缓存管理
-├── models/
-│   └── schemas.py          # 数据模型 (Sentence, Transcript, MeetingResult...)
-├── utils/
-│   └── audio.py            # 音频预处理工具
-└── data/
-    └── cookies/            # 浏览器 cookies (Bilibili 等)
+│   ├── graph.py            # LangGraph 状态与节点编排
+│   ├── tools.py            # 分类、会议 / 面试 / 通用分析工具
+│   ├── pipeline.py         # 分析与 Markdown 格式化实现
+│   ├── asr_client.py       # ASR 上传、轮询和结果解析
+│   ├── llm_client.py       # 兼容接口、工具调用、流式输出
+│   ├── classifier.py       # 录音分类
+│   ├── prompts.py          # 提示词
+│   ├── text_processor.py   # 清洗、分段与重叠窗口
+│   ├── video_client.py     # 视频下载、音频和字幕提取
+│   ├── cache.py            # 转写和报告缓存
+│   ├── context.py          # token 预算与上下文组装
+│   ├── memory.py           # 对话记忆、压缩和里程碑
+│   ├── chunker.py          # 父子分块
+│   ├── embedding.py        # 向量模型客户端
+│   ├── reranker.py         # 检索重排客户端
+│   ├── vector_store.py     # ChromaDB 索引与检索
+│   ├── quota.py            # 按 IP 配额及持久化
+│   └── tracing.py          # LangSmith 配置
+├── models/schemas.py       # 转写、会议结果等数据模型
+├── utils/audio.py          # 音频转换工具
+├── docs/graph.mmd          # 流程图源文件，实际流程以 graph.py 为准
+├── docs/graph.png
+├── test_stream.py          # 手工 SSE 调试脚本
+└── test_stream.html        # 浏览器流式调试页面
 ```
+
+## 输出与状态
+
+```text
+output/
+├── asr/                          # 转写缓存：{name}_{asr_model}.txt
+└── summary/
+    ├── meeting/                  # 会议纪要
+    ├── interview/                # 每份报告目录下 question.md、analyze.md
+    ├── video/                    # 视频总结
+    └── other/                    # 通用总结
+uploads/                          # Web 上传文件，按任务 ID 分目录
+ data/                            # cookies、配额数据、可选向量库
+```
+
+报告通常按来源名称和所用模型命名，具体规则见 `agent/cache.py` 和 `server.py`。任务状态和对话历史保存在进程内存中，服务重启后不会自动恢复；报告、转写缓存、配额数据及可选向量库保存在磁盘。当前没有完整的账号认证和任务隔离体系，对外部署前需补充访问控制。
+
+## 验证与开发现状
+
+运行 `uv run --locked python -m unittest discover -s tests -v`，测试启动脚本的依赖同步、状态检查、端口冲突和失败处理。`test_stream.py` 是独立的 SSE 手工调试脚本，需要提供真实任务 ID。
+
+配置密钥后，可上传一段短录音，检查任务进度、转写和报告下载、追问及重复处理时的缓存命中。
 
 ## License
 
-MIT
+[MIT](LICENSE)

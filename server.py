@@ -342,14 +342,15 @@ def _process(task_id: str, source: str, source_type: str,
         logger.info(f"[任务 {task_id}] 处理完成")
 
         # M5: 后台线程索引到向量库 (独立线程 + 独立 event loop)
-        import threading
-        task_data = dict(tasks.get(task_id, {}))
+        if settings.enable_vector_store:
+            import threading
+            task_data = dict(tasks.get(task_id, {}))
 
-        def _run_index():
-            import asyncio
-            asyncio.run(_index_task_to_vector_store(task_id, task_data))
-        threading.Thread(target=_run_index, daemon=True,
-                         name=f"index-{task_id}").start()
+            def _run_index():
+                import asyncio
+                asyncio.run(_index_task_to_vector_store(task_id, task_data))
+            threading.Thread(target=_run_index, daemon=True,
+                             name=f"index-{task_id}").start()
 
     except Exception as e:
         logger.error(f"[任务 {task_id}] 处理失败: {e}", exc_info=True)
@@ -812,7 +813,7 @@ async def chat_with_task(task_id: str, req: ChatRequest):
 
     # M5: RAG 检索增强 — 检测检索意图并注入历史上下文
     rag_context = ""
-    if _has_retrieval_intent(user_message):
+    if settings.enable_vector_store and _has_retrieval_intent(user_message):
         try:
             rag_results = await _retrieve_relevant_history(user_message)
             if rag_results:
@@ -932,7 +933,7 @@ async def chat_stream(task_id: str, req: ChatRequest):
 
     # M5: RAG 检索增强
     rag_context = ""
-    if _has_retrieval_intent(user_message):
+    if settings.enable_vector_store and _has_retrieval_intent(user_message):
         try:
             rag_results = await _retrieve_relevant_history(user_message)
             if rag_results:
@@ -1128,19 +1129,20 @@ async def global_chat(req: GlobalChatRequest):
 
     # M5: RAG 检索
     rag_context = ""
-    try:
-        rag_results = await _retrieve_relevant_history(user_message)
-        if rag_results:
-            rag_parts = []
-            for r in rag_results:
-                source_label = f"[{r.source_type}/{r.section}]"
-                rag_parts.append(f"{source_label} {r.parent_content}")
-            rag_context = "\n\n".join(rag_parts)
-            logger.info(
-                f"[GlobalChat] 检索到 {len(rag_results)} 条历史记录"
-            )
-    except Exception as e:
-        logger.warning(f"[GlobalChat] 检索失败: {e}")
+    if settings.enable_vector_store:
+        try:
+            rag_results = await _retrieve_relevant_history(user_message)
+            if rag_results:
+                rag_parts = []
+                for r in rag_results:
+                    source_label = f"[{r.source_type}/{r.section}]"
+                    rag_parts.append(f"{source_label} {r.parent_content}")
+                rag_context = "\n\n".join(rag_parts)
+                logger.info(
+                    f"[GlobalChat] 检索到 {len(rag_results)} 条历史记录"
+                )
+        except Exception as e:
+            logger.warning(f"[GlobalChat] 检索失败: {e}")
 
     # 构建 system prompt
     system_prompt = GLOBAL_CHAT_SYSTEM_PROMPT

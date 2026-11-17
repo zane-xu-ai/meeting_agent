@@ -165,18 +165,45 @@ def load_interview_cache(
     """
     尝试加载面试录音缓存。
 
-    命中返回 {"question": "...", "analyze": "..."}，未命中返回 None。
+    先精确匹配 (audio_stem + asr_model + llm_model)，
+    若未命中则按 audio_stem + asr_model 前缀模糊查找 (容忍 LLM 模型 fallback)。
+
+    命中返回 {"question": "...", "analyze": "...", "cache_dir": "..."}，
+    未命中返回 None。
     """
-    cache_dir = _interview_cache_dir(audio_stem, asr_model, llm_model)
+    interview_dir = settings.output_dir / "summary" / "interview"
+    if not interview_dir.exists():
+        return None
+
+    am = asr_model or settings.asr_models[0]
+    lm = llm_model or settings.llm_models[0]
+
+    # 1. 精确匹配
+    cache_dir = interview_dir / f"{audio_stem}_{am}_{lm}"
     q_path = cache_dir / "question.md"
     a_path = cache_dir / "analyze.md"
-
     if q_path.exists() and a_path.exists():
-        logger.info(f"[缓存命中] 面试分析结果: {cache_dir}/")
+        logger.info(f"[缓存命中] 面试分析结果 (精确): {cache_dir.name}/")
         return {
             "question": q_path.read_text(encoding="utf-8"),
             "analyze": a_path.read_text(encoding="utf-8"),
+            "cache_dir": str(cache_dir),
         }
+
+    # 2. 前缀模糊匹配 (容忍 LLM 模型名变化)
+    prefix = f"{audio_stem}_{am}_"
+    for d in sorted(interview_dir.iterdir(), reverse=True):
+        if d.is_dir() and d.name.startswith(prefix):
+            q2 = d / "question.md"
+            a2 = d / "analyze.md"
+            if q2.exists() and a2.exists():
+                logger.info(f"[缓存命中] 面试分析结果 (模糊): {d.name}/")
+                return {
+                    "question": q2.read_text(encoding="utf-8"),
+                    "analyze": a2.read_text(encoding="utf-8"),
+                    "cache_dir": str(d),
+                }
+
     return None
 
 
