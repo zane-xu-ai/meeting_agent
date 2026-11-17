@@ -208,6 +208,8 @@ uploads/                          # Web 上传文件，按任务 ID 分目录
 
 配置密钥后，可上传一段短录音，检查任务进度、转写和报告下载、追问及重复处理时的缓存命中。
 
+后续的 PostgreSQL 存储、分层缓存、历史页面、RabbitMQ 和 GPU 调度见 [实施计划](docs/persistence-queue-gpu-plan.md)。
+
 ## License
 
 [MIT](LICENSE)
