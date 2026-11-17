@@ -122,6 +122,8 @@ class Repository:
             "source_modified_at": modified,
             "timestamp_provenance": {"source_modified_at": "browser"} if modified else {},
         }
+        from persistence.stage_cache import policy_snapshot
+
         with self.engine.begin() as connection:
             self._workspace(connection)
             statement = pg_insert(s.media_sources).values(**source)
@@ -133,6 +135,7 @@ class Repository:
                 id=state["task_id"], workspace_id=PERSONAL, source_id=source_id,
                 media_version_id=version, status=state["status"], input_location=location,
                 state=state, request_config=request_config, batch_id=batch_id,
+                cache_policy_snapshot=policy_snapshot(connection),
             ))
             self._event(connection, state["task_id"], "status", state)
 

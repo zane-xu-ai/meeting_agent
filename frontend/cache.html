@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>缓存管理 · Meeting Agent</title>
+<style>
+body{font:1rem system-ui;max-width:1080px;margin:2rem auto;padding:0 1rem;background:#f5f7fa;color:#172235}
+nav,form{display:flex;gap:1rem;flex-wrap:wrap} a{color:#3759ac}
+table{background:white;border-collapse:collapse;width:100%;margin:1rem 0} td,th{padding:.6rem;border-bottom:1px solid #dbe4f0;text-align:left}
+button,select,input{font:inherit} button{cursor:pointer} pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:30rem;overflow:auto;background:white;padding:1rem}
+</style>
+<nav><a href="/">返回会议助手</a><a href="/history.html">分析历史</a></nav>
+<h1>缓存管理</h1>
+<p>策略应用于新任务。读取关闭时重新计算，写入关闭时本次结果不加入复用缓存。</p>
+<p id="message" role="status"></p>
+<table><thead><tr><th>阶段</th><th>读</th><th>写</th><th>保存小时</th><th>操作</th></tr></thead><tbody id="policies"></tbody></table>
+<label>筛选阶段 <select id="stage"><option value="">全部</option></select></label>
+<table><thead><tr><th>阶段</th><th>创建</th><th>到期</th><th>命中</th><th>状态</th><th>操作</th></tr></thead><tbody id="entries"></tbody></table>
+<pre id="preview" hidden></pre>
+<script src="/cache.js" defer></script>

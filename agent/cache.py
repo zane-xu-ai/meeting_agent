@@ -78,6 +78,11 @@ def load_asr_cache(audio_stem: str, asr_model: str | None = None) -> str | None:
     """
     尝试加载 ASR 缓存。命中返回转写文本，未命中返回 None。
     """
+    from persistence.stage_cache import cache_enabled
+
+    if cache_enabled():
+        return None
+
     cache_path = _asr_cache_path(audio_stem, asr_model)
     if cache_path.exists():
         logger.info(f"[缓存命中] ASR 结果: {cache_path.name}")
@@ -120,6 +125,11 @@ def load_summary_cache(
     """
     尝试加载 Summary 缓存 (会议/通用)。命中返回 Markdown 文本，未命中返回 None。
     """
+    from persistence.stage_cache import cache_enabled
+
+    if cache_enabled():
+        return None
+
     cache_path = _summary_cache_path(
         audio_stem, rec_type, asr_model, llm_model)
     if cache_path.exists():
@@ -171,6 +181,11 @@ def load_interview_cache(
     命中返回 {"question": "...", "analyze": "...", "cache_dir": "..."}，
     未命中返回 None。
     """
+    from persistence.stage_cache import cache_enabled
+
+    if cache_enabled():
+        return None
+
     interview_dir = settings.output_dir / "summary" / "interview"
     if not interview_dir.exists():
         return None

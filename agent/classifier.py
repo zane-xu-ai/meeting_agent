@@ -59,20 +59,22 @@ async def classify_recording(
     llm = LLMClient(models=[llm_model] if llm_model else None)
     prompt = CLASSIFY_PROMPT.format(transcript=sample)
 
-    try:
+    from persistence.stage_cache import memoized_classification
+
+    async def classify():
         data = await llm.chat_json(prompt)
         rec_type = data.get("type", "general")
-        confidence = data.get("confidence", 0.0)
-
-        # 校验类型值
         if rec_type not in ("meeting", "interview", "general"):
-            logger.warning(f"分类结果无效: {rec_type}，默认使用 general")
-            rec_type = "general"
+            raise ValueError("无效分类")
+        return {"category": rec_type, "model": llm.model,
+                "confidence": data.get("confidence"), "reason": data.get("reason")}
 
+    try:
+        data = await memoized_classification(sample, llm_model, classify)
+        rec_type = data.pop("category")
         if details is not None:
-            details.update(model=llm.model, confidence=confidence, reason=data.get("reason"))
-        logger.info(
-            f"录音分类: {rec_type} (confidence={confidence})")
+            details.update(data)
+        logger.info(f"录音分类: {rec_type} (confidence={data.get('confidence')})")
         return rec_type
 
     except Exception as e:

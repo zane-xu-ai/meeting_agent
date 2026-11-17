@@ -19,7 +19,7 @@ from loguru import logger
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import settings
 from agent.context import get_context_manager
@@ -778,6 +778,59 @@ def history_media(task_id: str):
     if not entry:
         raise HTTPException(404, "媒体文件不存在")
     return FileResponse(entry[0], media_type=entry[1] or "application/octet-stream")
+
+
+class CachePolicyRequest(BaseModel):
+    read: bool
+    write: bool
+    ttl: int = Field(ge=60, le=365 * 86400)
+
+
+@app.get("/api/cache")
+def cache_list(stage: str | None = None):
+    from persistence.stage_cache import list_cache
+    return list_cache(_history_repository(), stage)
+
+
+@app.put("/api/cache/policies/{stage}")
+def cache_settings(stage: str, policy: CachePolicyRequest):
+    from persistence.stage_cache import LAYERS, set_policy
+    if stage not in LAYERS:
+        raise HTTPException(404, "缓存阶段不存在")
+    set_policy(_history_repository(), stage, policy.read, policy.write, policy.ttl)
+    return policy
+
+
+@app.get("/api/cache/entries/{entry_id}")
+def cache_entry(entry_id: uuid.UUID):
+    from persistence.stage_cache import cache_preview
+    preview = cache_preview(_history_repository(), entry_id)
+    if preview is None:
+        raise HTTPException(404, "缓存不存在")
+    return {"preview": preview}
+
+
+@app.get("/api/cache/entries/{entry_id}/media")
+def cache_media(entry_id: uuid.UUID):
+    from persistence.stage_cache import cache_file
+    path = cache_file(_history_repository(), entry_id)
+    if not path:
+        raise HTTPException(404, "缓存媒体不存在")
+    return FileResponse(path, filename="cached-media" + path.suffix)
+
+
+@app.delete("/api/cache/entries/{entry_id}")
+def invalidate_cache_entry(entry_id: uuid.UUID):
+    from persistence.stage_cache import invalidate
+    return {"invalidated": invalidate(_history_repository(), identifier=entry_id)}
+
+
+@app.delete("/api/cache/stages/{stage}")
+def invalidate_cache_stage(stage: str):
+    from persistence.stage_cache import LAYERS, invalidate
+    if stage not in LAYERS:
+        raise HTTPException(404, "缓存阶段不存在")
+    return {"invalidated": invalidate(_history_repository(), stage=stage)}
 
 
 @app.get("/api/models")

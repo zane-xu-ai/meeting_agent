@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 
 from config import settings
 from persistence.schema import metadata
+from persistence import cache_schema  # noqa: F401
 
 
 dsn = os.environ.get("MIGRATION_DATABASE_URL") or settings.database_url

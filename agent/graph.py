@@ -154,6 +154,16 @@ async def extract_audio(state: AgentState) -> dict:
     source = state["source"]
     task_id = state["task_id"]
 
+    if source_type == "url_audio":
+        from utils.media_network import download_public_audio
+
+        root = settings.output_dir / "work" / task_id
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        target = root / "source.audio"
+        target.unlink(missing_ok=True)
+        await asyncio.to_thread(download_public_audio, source, target, settings.max_upload_bytes)
+        return {"source_asset": str(target)}
+
     if source_type in ("local_video", "url_video"):
         from agent.video_client import extract_audio_from_video
 
@@ -218,33 +228,17 @@ async def preprocess(state: AgentState) -> dict:
     source_type = state["source_type"]
     task_id = state["task_id"]
 
-    if source_type == "url_audio":
-        from tempfile import TemporaryDirectory
-        from utils.media_network import download_public_audio
-
-        _notify(task_id, step="正在下载远程音频...", progress=22, step_idx=1)
-        job_dir = settings.output_dir / "work" / task_id
-        job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        with TemporaryDirectory() as scratch:
-            target = (job_dir if settings.database_url else Path(scratch)) / "source.audio"
-            await asyncio.to_thread(download_public_audio, state["source"], target, settings.max_upload_bytes)
-            from utils.audio import preprocess_audio
-
-            path, duration = await asyncio.to_thread(
-                preprocess_audio, target, settings.asr_sample_rate, job_dir / "audio.wav",
-            )
-        _notify(task_id, step="预处理完成，准备转写...", progress=35, step_idx=1,
-                audio_duration=round(duration, 1))
-        return {"preprocessed_path": str(path), "asr_input": str(path), "source_asset": str(target)}
-
-    audio_path = state.get("audio_path") or state["source"]
+    audio_path = state.get("audio_path") or state.get("source_asset") or state["source"]
     _notify(task_id, step="正在预处理音频...", progress=22, step_idx=1)
     logger.info(f"[任务 {task_id}] 预处理音频: {Path(audio_path).name}")
 
     from utils.audio import preprocess_audio
 
-    preprocessed, audio_duration = preprocess_audio(
-        audio_path, sample_rate=settings.asr_sample_rate)
+    target_dir = settings.output_dir / "work" / task_id
+    target_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    preprocessed, audio_duration = await asyncio.to_thread(
+        preprocess_audio, audio_path, settings.asr_sample_rate, target_dir / "audio.wav",
+    )
 
     logger.info(
         f"[任务 {task_id}] 预处理完成: {preprocessed.name}, 时长 {audio_duration:.1f}s")
@@ -331,7 +325,7 @@ async def asr_transcribe(state: AgentState) -> dict:
     )
 
     # 清理预处理临时文件
-    if state.get("preprocessed_path"):
+    if state.get("preprocessed_path") and not settings.database_url:
         try:
             Path(state["preprocessed_path"]).unlink()
         except Exception:
@@ -575,6 +569,12 @@ async def format_output(state: AgentState) -> dict:
     if pipeline_start:
         total_dur = time.time() - pipeline_start
         notify_kwargs["total_duration"] = round(total_dur, 1)
+    if settings.database_url and state.get("transcript_text"):
+        root = settings.output_dir / "work" / task_id
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        export = root / "transcript.txt"
+        export.write_text(state["transcript_text"], encoding="utf-8")
+        notify_kwargs["asr_result_path"] = str(export)
     # 将 result_path 传递到任务状态 (面试分支已在分析节点直接设置)
     if state.get("result_path"):
         notify_kwargs["result_path"] = state["result_path"]
@@ -1001,6 +1001,25 @@ async def _fallback_analyze(
 # ═══════════════════════════════════════════════════════════════
 
 
+def pipeline_nodes():
+    """Shared stage entry points for in-process and queued execution."""
+    from persistence.stage_cache import graph_stage
+
+    def cached(layer, step):
+        async def run(state):
+            return await graph_stage(layer, step, state)
+        return run
+
+    return {
+        "extract_audio": cached("source", extract_audio),
+        "preprocess": cached("preprocess", preprocess),
+        "asr_transcribe": cached("asr", asr_transcribe),
+        "text_clean": cached("clean", text_clean),
+        "agent_loop": cached("analysis", agent_loop),
+        "format_output": format_output,
+    }
+
+
 def _build_graph():
     """构建并编译 LangGraph 状态图
 
@@ -1012,12 +1031,8 @@ def _build_graph():
     builder = StateGraph(AgentState)
 
     # 添加节点
-    builder.add_node("extract_audio", extract_audio)
-    builder.add_node("preprocess", preprocess)
-    builder.add_node("asr_transcribe", asr_transcribe)
-    builder.add_node("text_clean", text_clean)
-    builder.add_node("agent_loop", agent_loop)       # Function Calling 节点
-    builder.add_node("format_output", format_output)
+    for name, function in pipeline_nodes().items():
+        builder.add_node(name, function)
 
     # 线性边
     builder.add_edge(START, "extract_audio")

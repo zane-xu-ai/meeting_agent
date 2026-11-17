@@ -218,11 +218,19 @@ async def analyze_interview(
     return result
 
 
+def _validate_questions(data):
+    questions = data["questions"]
+    if not isinstance(questions, list) or any(not isinstance(q["question"], str) for q in questions):
+        raise ValueError("面试题目格式错误")
+
+
 async def _interview_single(llm: LLMClient, transcript_text: str) -> dict:
     """面试整体分析 (短文本)"""
     logger.info("面试分析 [1/2]: 提取面试官问题...")
     q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=transcript_text)
-    q_data = await llm.chat_json(q_prompt)
+    from persistence.stage_cache import memoized_json
+
+    q_data = await memoized_json(llm, q_prompt, _validate_questions)
 
     logger.info("面试分析 [2/2]: 逐题分析评分...")
     a_prompt = INTERVIEW_ANALYSIS_PROMPT.format(transcript=transcript_text)
@@ -239,6 +247,8 @@ async def _interview_segmented(llm: LLMClient, transcript_text: str) -> dict:
     3. 合并去重所有问题
     4. 按问题分批评分，每批保留完整转写作为上下文
     """
+    from persistence.stage_cache import memoized_json
+
     processor = TextProcessor()
     chunks = processor.chunk_by_sentences(
         transcript_text, chunk_size=3000, overlap_sentences=3)
@@ -249,7 +259,7 @@ async def _interview_segmented(llm: LLMClient, transcript_text: str) -> dict:
     for i, chunk in enumerate(chunks):
         logger.info(f"面试分段提取 [片段 {i + 1}/{len(chunks)}]...")
         q_prompt = INTERVIEW_QUESTIONS_PROMPT.format(transcript=chunk)
-        q_data = await llm.chat_json(q_prompt)
+        q_data = await memoized_json(llm, q_prompt, _validate_questions)
         for q in q_data["questions"]:
             q_key = q["question"][:20]
             if q_key and q_key not in seen_questions:
@@ -294,16 +304,23 @@ async def _score_interview_batch(
         f"\n\n只分析下列 {len(questions)} 个指定问题。每题单独评分，"
         f"JSON 的 question_analyses 必须包含全部指定问题，id 对应本批序号：\n{question_list}"
     )
-    try:
-        response = await llm.chat_json(prompt)
+    from persistence.stage_cache import memoized_json
+
+    def validate(response):
         items = response["question_analyses"]
-        expected_ids = set(range(1, len(questions) + 1))
-        # 单题批次只有一种匹配方式，允许模型省略或重编号。
-        by_id = {1: items[0]} if len(questions) == len(items) == 1 else {
-            int(item["id"]): item for item in items
-        }
-        if set(by_id) != expected_ids or len(items) != len(questions):
+        expected = set(range(1, len(questions) + 1))
+        mapped = {1: items[0]} if len(questions) == len(items) == 1 else {int(item["id"]): item for item in items}
+        if set(mapped) != expected or len(items) != len(questions):
             raise ValueError("评分返回的问题编号或数量与本批输入不一致")
+        if any(not 0 <= int(item["score"]) <= 100 for item in mapped.values()):
+            raise ValueError("评分超出 0–100")
+        if not isinstance(response["overall_summary"], str):
+            raise ValueError("评分摘要格式错误")
+        return mapped
+
+    try:
+        response = await memoized_json(llm, prompt, validate)
+        by_id = validate(response)
         analyses = []
         for position, question in enumerate(questions, 1):
             item = by_id[position]
