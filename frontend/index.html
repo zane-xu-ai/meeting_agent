@@ -1831,7 +1831,7 @@
               </svg>
               下载报告
             </button>
-            <button class="btn-sm" v-if="activeResultTab === 'analysis' && meta.rec_type === 'interview'"
+            <button class="btn-sm" v-if="activeResultTab === 'analysis' && (meta.rec_type === 'interview' || questionsAvailable)"
               @click="downloadQuestions">
               下载问题清单
             </button>
@@ -2206,6 +2206,7 @@
           step_idx: -1, download_progress: 0,
         });
         const detailsOpen = ref(false);
+        const questionsAvailable = ref(false);
 
         const task = reactive({
           task_id: '', filename: '', file_type: '', progress: 0,
@@ -2505,11 +2506,7 @@
                   // 完成
                   eventSource.close();
                   resultMd.value = data.data.output_text || fullContent;
-                  // Fetch final status for complete metadata
-                  fetch(`${API}/api/status/${task.task_id}`)
-                    .then(r => r.json())
-                    .then(sd => updateMeta(sd))
-                    .catch(() => { });
+                  fetchResultFallback();
                   phase.value = 'done';
                   stopStepTimer();
                 } else if (data.type === 'error') {
@@ -2546,7 +2543,10 @@
           try {
             const r = await fetch(`${API}/api/result/${task.task_id}`);
             const d = await r.json();
+            if (!r.ok) throw new Error(d.detail || '获取结果失败');
             resultMd.value = d.content || '';
+            questionsAvailable.value = d.questions_available === true;
+            if (d.rec_type) meta.rec_type = d.rec_type;
             try {
               const sr = await fetch(`${API}/api/status/${task.task_id}`);
               const sd = await sr.json();
@@ -2817,6 +2817,7 @@
         }
 
         function resetAll() {
+          questionsAvailable.value = false;
           clearInterval(pollTimer);
           stopStepTimer();
           phase.value = 'idle';
@@ -2870,14 +2871,42 @@
         }
 
         // ── Lifecycle ──
-        onMounted(() => { initTheme(); checkHealth(); fetchModels(); fetchQuota(); });
+        async function restoreCompletedTask() {
+          const id = new URLSearchParams(window.location.search).get('task');
+          if (!id) return;
+          task.task_id = id;
+          try {
+            const response = await fetch(`${API}/api/status/${encodeURIComponent(id)}`);
+            const status = await response.json();
+            if (!response.ok) throw new Error(status.detail || '任务不存在');
+            Object.assign(task, {
+              filename: status.filename || id, file_type: status.file_type || '',
+              progress: status.progress || 0, step: status.step || '',
+            });
+            updateMeta(status);
+            if (status.status === 'completed') {
+              await fetchResultFallback();
+            } else if (status.status === 'failed' || status.status === 'cancelled') {
+              phase.value = 'error';
+              task.error = status.error || '任务已结束';
+            } else {
+              phase.value = 'processing';
+              startPolling();
+            }
+          } catch (error) {
+            phase.value = 'error';
+            task.error = error.message;
+          }
+        }
+
+        onMounted(() => { initTheme(); checkHealth(); fetchModels(); fetchQuota(); restoreCompletedTask(); });
         onUnmounted(() => { clearInterval(pollTimer); stopStepTimer(); });
 
         return {
           phase, isDragging, apiOk, copied, task, steps, acceptExts,
           renderedMd, resultMd, inputMode, inputUrl, activeResultTab, asrText, isDark,
           asrModels, llmModels, selectedAsrModel, selectedLlmModel,
-          meta, detailsOpen, stageTimings,
+          meta, detailsOpen, stageTimings, questionsAvailable,
           quotaInfo,
           onDrop, onFileSelect, submitUrl, downloadResult, downloadQuestions, copyResult, resetAll,
           formatTime, formatFileSize, formatDuration, sourceTypeLabel, recTypeLabel,

@@ -1,5 +1,7 @@
 """Regression coverage for completed interview downloads, without model calls."""
 
+import shutil
+import subprocess
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
@@ -31,7 +33,7 @@ class QuestionDownloadTests(unittest.TestCase):
         questions = [item for item in parser.buttons if item.get("@click") == "downloadQuestions"]
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0]["v-if"],
-                         "activeResultTab === 'analysis' && meta.rec_type === 'interview'")
+                         "activeResultTab === 'analysis' && (meta.rec_type === 'interview' || questionsAvailable)")
         self.assertIn("submitUrl, downloadResult, downloadQuestions, copyResult", source)
         self.assertIn("/api/questions/${encodeURIComponent(task.task_id)}/download", source)
         self.assertTrue(any(item.get("@click") == "downloadResult" for item in parser.buttons))
@@ -56,3 +58,37 @@ class QuestionDownloadTests(unittest.TestCase):
         self.assertIn("questions.md", response.headers["content-disposition"])
         repo.content.assert_called_once_with("existing-interview", "questions")
         analyze.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("node"), "requires Node for frontend lifecycle regression")
+    def test_completed_task_page_restores_download_actions(self):
+        subprocess.run(["node", str(ROOT / "tests/question_download_frontend.cjs")],
+                       check=True, capture_output=True, text=True, timeout=10)
+
+    def test_page_assets_cannot_reuse_old_browser_cache(self):
+        with (
+            patch.object(server.settings, "workspace_token", ""),
+            TestClient(server.app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client,
+        ):
+            for url in ("/", "/batch.js"):
+                response = client.get(url)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers["cache-control"], "no-store")
+
+    def test_result_metadata_reports_persisted_question_availability(self):
+        repo = Mock()
+        repo.task.return_value = {
+            "task_id": "complete", "status": "completed", "rec_type": "interview",
+            "filename": "example.m4a",
+        }
+        repo.content.side_effect = lambda task, kind: "# Questions" if kind == "questions" else "# Report"
+        with (
+            patch.object(server, "repository", return_value=repo),
+            patch.object(server.settings, "workspace_token", ""),
+            patch.object(server, "_process") as process,
+            TestClient(server.app, base_url="http://localhost", client=("127.0.0.1", 1234)) as client,
+        ):
+            response = client.get("/api/result/complete")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["rec_type"], "interview")
+        self.assertTrue(response.json()["questions_available"])
+        process.assert_not_called()

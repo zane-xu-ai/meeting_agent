@@ -87,6 +87,8 @@ async def require_workspace(request: Request, call_next):
                 return JSONResponse({"detail": "请求来源与工作区不同"}, 403)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
+    if request.url.path == "/" or request.url.path.endswith((".html", ".js")):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -847,7 +849,18 @@ async def _get_content(task_id, kind):
 
 @app.get("/api/result/{task_id}")
 async def get_result(task_id: str):
-    return await _get_content(task_id, "result")
+    result = await _get_content(task_id, "result")
+    task = await asyncio.to_thread(_read_task, task_id)
+    try:
+        questions = await _get_content(task_id, "questions") if task.get("rec_type") == "interview" else None
+    except HTTPException as error:
+        if error.status_code != 404:
+            raise
+        questions = None
+    return {
+        **result, "rec_type": task.get("rec_type"),
+        "questions_available": bool(questions and questions["content"].strip()),
+    }
 
 
 @app.get("/api/result/{task_id}/download")
