@@ -1831,6 +1831,10 @@
               </svg>
               下载报告
             </button>
+            <button class="btn-sm" v-if="activeResultTab === 'analysis' && meta.rec_type === 'interview'"
+              @click="downloadQuestions">
+              下载问题清单
+            </button>
             <button class="btn-sm" v-if="activeResultTab === 'analysis'" @click="copyResult">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                 stroke-linecap="round" stroke-linejoin="round">
@@ -2800,6 +2804,10 @@
           window.open(`${API}/api/result/${task.task_id}/download`);
         }
 
+        function downloadQuestions() {
+          window.open(`${API}/api/questions/${encodeURIComponent(task.task_id)}/download`);
+        }
+
         async function copyResult() {
           try {
             await navigator.clipboard.writeText(resultMd.value);
@@ -2871,7 +2879,7 @@
           asrModels, llmModels, selectedAsrModel, selectedLlmModel,
           meta, detailsOpen, stageTimings,
           quotaInfo,
-          onDrop, onFileSelect, submitUrl, downloadResult, copyResult, resetAll,
+          onDrop, onFileSelect, submitUrl, downloadResult, downloadQuestions, copyResult, resetAll,
           formatTime, formatFileSize, formatDuration, sourceTypeLabel, recTypeLabel,
           switchToAsr, downloadAsr, toggleTheme,
           chatMessages, chatInput, chatLoading, chatMessagesEl, chatInputEl,

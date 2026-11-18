@@ -52,6 +52,12 @@ async function poll() {
         link.href = '/api/result/' + encodeURIComponent(task.task_id) + '/download';
         link.textContent = '下载报告';
         actions.append(link);
+        if (task.rec_type === 'interview') {
+          const questions = document.createElement('a');
+          questions.href = '/api/questions/' + encodeURIComponent(task.task_id) + '/download';
+          questions.textContent = '下载问题清单';
+          actions.append(' · ', questions);
+        }
       } else if (task.status === 'failed' || !terminal.has(task.status) && task.status !== 'cancel_requested') {
         const action = task.status === 'failed' ? 'resume' : 'cancel';
         actions.append(button(action === 'resume' ? '续跑' : '取消', async () => {
