@@ -1,0 +1,34 @@
+flowchart TB
+  subgraph Time[时间事实归一]
+    INPUT[人工输入 · 平台元数据 · 原文 · 文件名]
+    TC[候选时间 · 来源 · 时区 · 精度]
+    CONFLICT{缺年份或来源冲突}
+    CONFIRM[候选展示与确认]
+    EVENT[有效会议日期与发生时间]
+    INPUT --> TC --> CONFLICT
+    CONFLICT -- 有 --> CONFIRM --> EVENT
+    CONFLICT -- 无且可信 --> EVENT
+  end
+  subgraph People[人物与出席事实]
+    TEXT[转写 speaker · 自我介绍 · 名单]
+    M[独立 mention 与转写内 speaker]
+    ER[工作区别名与组织上下文消歧]
+    AMBIG{能否可靠确认}
+    PERSON[person ID 与可撤销绑定]
+    UNKNOWN[未知人物 · 同名候选]
+    STATUS[确认参会 / 发言 / 受邀 / 被提及]
+    TEXT --> M --> ER --> AMBIG
+    AMBIG -- 是 --> PERSON --> STATUS
+    AMBIG -- 否 --> UNKNOWN --> STATUS
+  end
+  SESSION[meeting_session · 一次真实会议]
+  RECORD[多录音与多次分析关联]
+  EVIDENCE[(原文段 / 名单快照 / 人工确认)]
+  FACTS[(有效事实版本 + 支持和反驳证据)]
+  EVENT --> SESSION
+  RECORD --> SESSION
+  SESSION --> FACTS
+  STATUS --> FACTS
+  EVIDENCE --> FACTS
+  FACTS --> QUERY[SQL 去重统计与可追溯回答]
+  UNKNOWN -. 身份缺口 .-> QUERY

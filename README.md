@@ -210,6 +210,8 @@ uploads/                          # Web 上传文件，按任务 ID 分目录
 
 后续的 PostgreSQL 存储、分层缓存、历史页面、RabbitMQ 和 GPU 调度见 [实施计划](docs/persistence-queue-gpu-plan.md)。
 
+会议历史问答的 Baseline、目标版本、NL2SQL 和事件图谱选型见 [开发计划](docs/meeting-knowledge-query-plan.md) 与 [架构图册](docs/architecture/README.md)。
+
 ## License
 
 [MIT](LICENSE)

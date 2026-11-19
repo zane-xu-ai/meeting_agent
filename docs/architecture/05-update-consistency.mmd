@@ -1,0 +1,29 @@
+flowchart LR
+  WRITE[新分析 / 导入 / 人工纠正 / 删除 / 撤权]
+  TX[主库事务 · 事实版本 + 知识版本 + Outbox]
+  INVALID[立即撤销旧答案复用资格]
+  MQ[可靠派发 · 幂等后台构建]
+  EX[增量事实抽取与证据校验]
+  FACT[(PG 有效事实与构建状态)]
+  PROJ[投影生成 · 版本与同步水位]
+  IDX[(词法 / 向量 / 可选图投影)]
+  ASK[新查询]
+  AUTH[验证权限与当前知识版本]
+  CACHE{答案缓存键与水位有效}
+  HIT[复核引用后返回]
+  READ[主库选定会议与事实]
+  FRESH{所需投影是否追平}
+  SEARCH[受授权过滤的投影检索]
+  FALLBACK[主库回退 / 部分回答 / 等待构建]
+  ANSWER[证据与覆盖校验]
+  WRITE --> TX --> INVALID
+  TX --> MQ --> EX --> FACT --> PROJ --> IDX
+  ASK --> AUTH --> CACHE
+  CACHE -- 是 --> HIT
+  CACHE -- 否 --> READ --> FRESH
+  FRESH -- 是 --> SEARCH --> ANSWER
+  FRESH -- 否 --> FALLBACK --> ANSWER
+  FACT --> READ
+  IDX --> SEARCH
+  INVALID -. 新版本使缓存失效 .-> CACHE
+  AUTH -. 最终可见性复核 .-> ANSWER

@@ -1,0 +1,28 @@
+flowchart LR
+  subgraph Prepare[离线事实准备]
+    OLD[现有分析与转写]
+    EX[增量抽取日期 · 人物 · 议题]
+    REVIEW[校验与人工确认]
+    DB[(PG 会议事件 · 事实 · 证据)]
+    OLD --> EX --> REVIEW --> DB
+  end
+  subgraph Query[Baseline 查询]
+    ASK[用户问题]
+    ID[真实身份与工作区]
+    TIME[确定性时间区间]
+    INTENT[有限意图 QueryPlan]
+    CHECK{歧义或缺关键字段}
+    CLARIFY[澄清范围或身份]
+    TPL[参数化 SQL 模板]
+    SET[查全会议集合 · 事件去重]
+    FACTS[参会关联 / 逐场主题及原文]
+    RESULT[聚合结果 · 覆盖率 · 引用]
+    REPLY[可验证回答]
+    ASK --> ID --> TIME --> INTENT --> CHECK
+    CHECK -- 有 --> CLARIFY
+    CLARIFY --> TIME
+    CHECK -- 无 --> TPL --> SET --> FACTS --> RESULT --> REPLY
+  end
+  TPL --> DB
+  FACTS --> DB
+  RESULT -. 缺数据 .-> GAP[部分答案与补录入口]

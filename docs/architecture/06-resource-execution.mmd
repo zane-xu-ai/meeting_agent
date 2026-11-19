@@ -1,0 +1,34 @@
+flowchart TB
+  subgraph Online[在线问答]
+    Q[用户查询]
+    READ[SQL / 已有事实 / 证据读取]
+    RET[查询编排与可解释回答]
+    LLM[受限额控制的云端生成]
+    Q --> READ --> RET
+  end
+  subgraph Jobs[后台构建]
+    IN[分析完成与历史回填]
+    MQ[RabbitMQ · 阶段任务]
+    CPU[CPU · 时间解析 / 校验 / 索引管理]
+    CLOUD[云端抽取与重排 · 限额 / 退避]
+    LOCAL[本地 ASR / Embedding / 抽取与重排]
+    IN --> MQ
+    MQ --> CPU & CLOUD & LOCAL
+  end
+  GATE[共享 GPU 调度 · 实时显存 / Profile / 租约]
+  CARD[RTX 3060 Ti · 单卡]
+  OTHER[Ollama 与其他项目]
+  WAIT[显存不足 → 等待并释放消费槽]
+  ALERT[超时 / OOM / 外部阻塞告警]
+  PG[(PostgreSQL · 构建状态与事实)]
+  LOCAL --> GATE
+  OTHER -. 托管申请 .-> GATE
+  OTHER -. 未托管占用观测 .-> GATE
+  GATE -- 满足预算 --> CARD
+  GATE -- 不能准入 --> WAIT --> MQ
+  WAIT -. 持续阻塞 .-> ALERT
+  CARD -. 异常 .-> ALERT
+  CPU & CLOUD & CARD --> PG
+  PG --> READ
+  RET -. 需要本地模型时 .-> GATE
+  RET -. 云端回答 .-> LLM

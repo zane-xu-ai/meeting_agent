@@ -1,0 +1,59 @@
+flowchart TB
+  subgraph UI[用户界面]
+    U[上传与批量任务]
+    H[分析历史与下载]
+    Q[历史问答与引用]
+    C[日期与身份确认]
+  end
+  API[FastAPI · 身份与工作区校验]
+  U --> API
+  H --> API
+  Q --> API
+  C --> API
+  subgraph Processing[分析与知识构建]
+    OB[事务 Outbox]
+    MQ[RabbitMQ · 分阶段队列]
+    PIPE[获取媒体 → 预处理 → ASR → 分类与分析]
+    FACT[时间候选 · 人物 · 名单 · 议题 · 证据]
+    BUILD[知识版本与投影构建]
+    OB --> MQ --> PIPE --> FACT --> BUILD
+  end
+  subgraph Serving[目标问答路径]
+    PLAN[时间解析与 QueryPlan]
+    ROUTE[受控查询编排]
+    SQL[模板 SQL 与受约束统计]
+    HYBRID[词法与向量召回 · Rerank]
+    REL[有限多跳关系查询]
+    ANSWER[覆盖与引用校验 → 回答]
+    PLAN --> ROUTE
+    ROUTE --> SQL & HYBRID & REL
+    SQL & HYBRID & REL --> ANSWER
+  end
+  PG[(PostgreSQL · 业务事实与证据主库)]
+  MEDIA[(文件存储 · 音视频与派生产物)]
+  VEC[(词法与向量读索引)]
+  GRAPH[(可选 Neo4j 读投影)]
+  MODELS[云端 API / 本地模型]
+  GPU[共享 GPU 租约 · 准入与排队]
+  OBS[审计 · 指标 · LangSmith]
+  API --> OB
+  API --> PLAN
+  API <--> PG
+  PIPE <--> MEDIA
+  PIPE --> PG
+  FACT --> PG
+  BUILD --> VEC
+  BUILD -. 达到引入门槛 .-> GRAPH
+  SQL --> PG
+  HYBRID --> VEC
+  REL --> PG
+  REL -. 可选加速 .-> GRAPH
+  ANSWER --> Q
+  C --> FACT
+  PIPE & FACT & ANSWER --> MODELS
+  MODELS -. 本地推理 .-> GPU
+  API & MQ & GPU & ANSWER -.-> OBS
+  classDef store fill:#edf4fc,stroke:#4b77a8,color:#19324b
+  classDef future fill:#f4edff,stroke:#8b69b7,color:#43305e
+  class PG,MEDIA store
+  class PLAN,ROUTE,SQL,HYBRID,REL,FACT,BUILD,VEC,GRAPH future
