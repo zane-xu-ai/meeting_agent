@@ -2,11 +2,13 @@
 import json
 import time
 import uuid
-from datetime import datetime,timezone
+from datetime import datetime,timezone,timedelta
 from sqlalchemy import select,func,insert
 from knowledge import schema as k
 from knowledge.planner import plan,Clarification
 from knowledge.store import revision
+from persistence.stage_cache import fingerprint
+from config import settings
 
 
 def json_safe(value):
@@ -92,16 +94,35 @@ def query(repo,workspace,question,conversation='default',*,anchor=None,timezone_
     with repo.engine.begin() as c:
         previous=c.scalar(select(k.queries.c.plan).where(k.queries.c.workspace_id==workspace,k.queries.c.conversation==conversation)
                           .order_by(k.queries.c.created_at.desc(),k.queries.c.id.desc()).limit(1))
+        cached=None
+        version=revision(c,workspace)
         try:
             p=plan(question,anchor,timezone_name,previous)
             if p.intent=='relations':raise Clarification('请先指定项目、决策或行动项，关系查询需要已登记的证据')
-            facts,evidence,unknown=execute(c,workspace,p)
-            result=respond(p,facts,evidence,unknown)
             normalized=p.model_dump(mode='json')
-            normalized['matched_ids']=result['matched_ids']
+            cache_key=fingerprint(['query-v2',normalized,version,settings.knowledge_semantic_enabled,settings.knowledge_rerank_enabled,settings.embedding_model,settings.rerank_model])
+            if p.intent!='search':
+                cached=c.scalar(select(k.queries.c.response).where(k.queries.c.workspace_id==workspace,k.queries.c.knowledge_revision==version,
+                    k.queries.c.plan['cache_key'].astext==cache_key,k.queries.c.created_at>datetime.now(timezone.utc)-timedelta(seconds=60)).order_by(k.queries.c.created_at.desc()).limit(1))
+            if cached:
+                result={**cached,'cache_hit':True}
+            else:
+                facts,evidence,unknown=execute(c,workspace,p)
+                result=respond(p,facts,evidence,unknown)
+            normalized.update(cache_key=cache_key,matched_ids=result['matched_ids'])
         except Clarification as error:
             result={'status':'clarify','reply':str(error),'evidence':[],'claims':[]}
             normalized={'question':question}
+        if result['status']!='clarify' and p.intent=='search':
+            from knowledge.retrieval import retrieve
+            hits,search_coverage=retrieve(c,workspace,[event['id'] for event in facts],p.terms)
+            result['retrieval']=search_coverage
+            result['status']='partial' if hits else 'no_match'
+            result['reply']='搜索结果仅表示命中片段，不能据此推断全部会议的语义总数。\n'+ '\n'.join(hit['text'] for hit in hits)
+            result['evidence']=[{'id':str(hit['evidence_id']),'session_id':str(hit['session_id']),'quote':hit['quote'],'kind':hit['kind'],'start_ms':hit['start_ms'],'end_ms':hit['end_ms']} for hit in hits]
+            result['matched_ids']=list(dict.fromkeys(str(hit['session_id']) for hit in hits))
+            result['coverage']['matched']=len(result['matched_ids'])
+            normalized['matched_ids']=result['matched_ids']
         result.update(query_id=str(identifier),plan=normalized,as_of=anchor.isoformat(),timezone=timezone_name)
         result=json_safe(result)
         c.execute(insert(k.queries).values(id=identifier,workspace_id=workspace,conversation=conversation,question=question,

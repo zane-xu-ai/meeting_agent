@@ -12,7 +12,10 @@ if __name__ == '__main__':
     repo=repository()
     if not repo: raise SystemExit('DATABASE_URL is required')
     while True:
-        try: logger.info('知识构建完成 {} 条',backfill(repo))
+        try:
+            logger.info('知识构建完成 {} 条',backfill(repo))
+            from knowledge.retrieval import index
+            index(repo)
         except Exception as error:
             if args.once: raise
             logger.error('知识构建暂不可用 {}',type(error).__name__)

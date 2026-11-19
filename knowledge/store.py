@@ -125,4 +125,5 @@ def confirm(repo,workspace,session,*,event_date=None,names=None):
                 evidence=add_evidence(c,workspace,session,'用户确认参会：'+name,kind='user_confirmation',rev=rev)
                 c.execute(insert(k.participants).values(id=uuid.uuid4(),session_id=session,person_id=person_id,display_name=name,status='confirmed',evidence_id=evidence,active=True))
         c.execute(update(k.sessions).where(k.sessions.c.id==session).values(**values))
+        c.execute(update(k.chunks).where(k.chunks.c.session_id==session).values(source_revision=rev))
         bump(c,workspace)

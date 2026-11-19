@@ -73,3 +73,28 @@ def get_evidence(evidence_id:uuid.UUID):
             k.evidence.c.workspace_id==PERSONAL,k.evidence.c.id==evidence_id,k.sessions.c.deleted.is_(False))).mappings().one_or_none()
         if row is None:raise HTTPException(404,'引用不存在或已撤销')
         return dict(row)
+
+class FeedbackRequest(BaseModel):
+    query_id:uuid.UUID
+    helpful:bool
+    note:str|None=Field(default=None,max_length=1000)
+
+@router.post('/feedback')
+def feedback(body:FeedbackRequest):
+    from sqlalchemy import insert
+    with repo_required().engine.begin() as c:
+        if not c.scalar(select(k.queries.c.id).where(k.queries.c.workspace_id==PERSONAL,k.queries.c.id==body.query_id)):
+            raise HTTPException(404,'查询不存在')
+        c.execute(insert(k.feedback).values(id=uuid.uuid4(),workspace_id=PERSONAL,query_id=body.query_id,helpful=body.helpful,note=body.note))
+    return {'saved':True}
+
+@router.delete('/sessions/{session_id}')
+def delete_session(session_id:uuid.UUID):
+    from sqlalchemy import update
+    from knowledge.store import bump
+    with repo_required().engine.begin() as c:
+        try:owned(c,PERSONAL,session_id,lock=True)
+        except LookupError as error:raise HTTPException(404,str(error)) from error
+        c.execute(update(k.sessions).where(k.sessions.c.id==session_id).values(deleted=True))
+        bump(c,PERSONAL)
+    return {'deleted':True}
