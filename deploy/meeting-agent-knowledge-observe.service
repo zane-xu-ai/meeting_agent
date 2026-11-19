@@ -1,0 +1,12 @@
+[Unit]
+Description=Meeting Agent 24-hour knowledge release observation
+After=meeting-agent.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/meeting_agent
+ExecStart=%h/projects/meeting_agent/.venv/bin/python -u -m knowledge.observe
+UMask=0077
+
+[Install]
+WantedBy=default.target

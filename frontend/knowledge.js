@@ -1,7 +1,8 @@
 const $=id=>document.getElementById(id);
 let offset=0;
 let queryId;
-const conversation=crypto.randomUUID();
+const conversation=sessionStorage.getItem('knowledge-conversation')||crypto.randomUUID();
+sessionStorage.setItem('knowledge-conversation',conversation);
 async function call(path,options){
  const response=await fetch('/api/knowledge'+path,options);
  const data=await response.json();
@@ -12,7 +13,7 @@ const json=(method,body)=>({method,headers:{'Content-Type':'application/json'},b
 async function load(reset=false){
  if(reset){offset=0;$('rows').replaceChildren();}
  const [list,stats]=await Promise.all([call('/sessions?limit=30&offset='+offset),call('/coverage')]);
- $('stats').textContent=`共 ${stats.sessions} 场事件，日期已确认 ${stats.confirmed_dates} 场，待确认 ${stats.unknown_or_candidate_dates} 场。`;
+ $('stats').textContent=`共 ${stats.sessions} 场事件，日期已确认 ${stats.confirmed_dates} 场，待确认 ${stats.unknown_or_candidate_dates} 场 · 回填失败 ${stats.failed_builds} 条 · 向量水位 ${stats.embedded_chunks}/${stats.current_chunks} 段。`;
  for(const item of list.items){
   const row=$('rows').insertRow();
   [item.title,item.event_date||'未知',item.time_status==='confirmed'?'已确认':'待确认'].forEach(text=>row.insertCell().textContent=text);

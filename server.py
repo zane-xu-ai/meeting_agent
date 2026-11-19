@@ -27,7 +27,7 @@ from agent.memory import get_memory_manager
 from agent.quota import QuotaManager
 from utils.ingress import RequestLimit, authorized, save_upload
 from utils.media_network import UnsafeMediaURL, validate_media_url
-from persistence.repository import public_state, repository
+from persistence.repository import PERSONAL as PERSONAL_WORKSPACE, public_state, repository
 from persistence import dispatch
 
 # M5: 长期记忆 (向量检索)
@@ -1408,210 +1408,59 @@ class GlobalChatRequest(BaseModel):
     session_id: str = "default"
 
 
-# 全局对话历史存储 (按 session_id 隔离)
-_global_chat_histories: dict[str, list[dict]] = {}
+def _knowledge_answer(req):
+    repo = repository()
+    if not settings.knowledge_enabled or repo is None:
+        return {"reply": "当前没有可引用的会议记录。请先确认知识查询已启用并配置数据库。", "status": "no_match", "evidence": []}
+    from knowledge.query import query
+    return query(repo, PERSONAL_WORKSPACE, req.message, req.session_id)
 
 
 @app.post("/api/global-chat")
-async def global_chat(req: GlobalChatRequest):
-    """
-    全局 RAG 对话 — 无需上传文件，直接查询历史分析记录
-
-    流程:
-    1. 检测检索意图
-    2. 向量检索 + Rerank 精排
-    3. 注入检索结果到 system prompt
-    4. LLM 生成回答
-    """
-    user_message = req.message.strip()
-    session_id = req.session_id or "default"
-
-    if not user_message:
+def global_chat(req: GlobalChatRequest):
+    if not req.message.strip():
         raise HTTPException(400, "消息不能为空")
-
-    logger.info(
-        f"[GlobalChat] session={session_id}: "
-        f"user='{user_message[:60]}'"
-    )
-
-    # 获取/初始化会话历史
-    if session_id not in _global_chat_histories:
-        _global_chat_histories[session_id] = []
-    history = _global_chat_histories[session_id]
-
-    # M5: RAG 检索
-    rag_context = ""
-    if settings.enable_vector_store:
-        try:
-            rag_results = await _retrieve_relevant_history(user_message)
-            if rag_results:
-                rag_parts = []
-                for r in rag_results:
-                    source_label = f"[{r.source_type}/{r.section}]"
-                    rag_parts.append(f"{source_label} {r.parent_content}")
-                rag_context = "\n\n".join(rag_parts)
-                logger.info(
-                    f"[GlobalChat] 检索到 {len(rag_results)} 条历史记录"
-                )
-        except Exception as e:
-            logger.warning(f"[GlobalChat] 检索失败: {e}")
-
-    # 构建 system prompt
-    system_prompt = GLOBAL_CHAT_SYSTEM_PROMPT
-    if rag_context:
-        system_prompt += f"\n\n## 相关历史记录\n{rag_context}"
-    else:
-        return {"reply": "当前没有可引用的会议记录。请先确认记录范围和知识构建状态。", "status": "no_match", "evidence": []}
-
-    # 构建 messages
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history[-20:])  # 最近 10 轮 (20 条消息)
-    messages.append({"role": "user", "content": user_message})
-
-    # 调用 LLM
-    try:
-        from agent.llm_client import LLMClient
-        llm = LLMClient()
-        reply = await llm.chat_messages(messages, temperature=0.5, max_tokens=4096)
-
-        # 检查空回复
-        if not reply or not reply.strip():
-            logger.warning(f"[任务 {task_id}] LLM 返回空回复")
-            reply = "抱歉，我暂时无法回答这个问题。请稍后重试，或者尝试换一种提问方式。"
-
-        # 保存历史
-        history.append({"role": "user", "content": user_message})
-        history.append({"role": "assistant", "content": reply})
-
-        # 限制历史长度 (保留最近 40 条)
-        if len(history) > 40:
-            _global_chat_histories[session_id] = history[-40:]
-
-        logger.info(
-            f"[GlobalChat] session={session_id}: "
-            f"reply={len(reply)} chars, history={len(_global_chat_histories[session_id])} msgs"
-        )
-        return {"reply": reply}
-
-    except Exception as e:
-        logger.error(f"[GlobalChat] 对话失败: {e}")
-        raise HTTPException(500, f"对话失败: {e}")
+    return _knowledge_answer(req)
 
 
-# M9: 全局聊天流式输出版本
 @app.post("/api/global-chat/stream")
 async def global_chat_stream(req: GlobalChatRequest):
-    """
-    M9: 全局 RAG 对话流式输出版本
-
-    使用 SSE 流式输出 LLM 回答
-    """
-    user_message = req.message.strip()
-    session_id = req.session_id or "default"
-
-    if not user_message:
+    if not req.message.strip():
         raise HTTPException(400, "消息不能为空")
-
-    logger.info(
-        f"[GlobalChat-Stream] session={session_id}: user='{user_message[:60]}'")
-
-    # 获取/初始化会话历史
-    if session_id not in _global_chat_histories:
-        _global_chat_histories[session_id] = []
-    history = _global_chat_histories[session_id]
-
-    # M5: RAG 检索
-    rag_context = ""
-    try:
-        rag_results = await _retrieve_relevant_history(user_message)
-        if rag_results:
-            rag_parts = []
-            for r in rag_results:
-                source_label = f"[{r.source_type}/{r.section}]"
-                rag_parts.append(f"{source_label} {r.parent_content}")
-            rag_context = "\n\n".join(rag_parts)
-            logger.info(f"[GlobalChat-Stream] 检索到 {len(rag_results)} 条历史记录")
-    except Exception as e:
-        logger.warning(f"[GlobalChat-Stream] 检索失败: {e}")
-
-    # 构建 system prompt
-    system_prompt = GLOBAL_CHAT_SYSTEM_PROMPT
-    if rag_context:
-        system_prompt += f"\n\n## 相关历史记录\n{rag_context}"
-    else:
-        async def missing_evidence():
-            payload = {"type": "done", "data": {"reply": "当前没有可引用的会议记录。请先确认记录范围和知识构建状态。", "status": "no_match"}}
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        return StreamingResponse(missing_evidence(), media_type="text/event-stream")
-
-    # 构建 messages
-    messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history[-20:])
-    messages.append({"role": "user", "content": user_message})
-
-    async def event_generator():
+    async def generate():
         try:
-            from agent.llm_client import LLMClient
-            llm = LLMClient()
-
-            # 发送开始事件
+            result = await asyncio.to_thread(_knowledge_answer, req)
             yield f"data: {json.dumps({'type': 'start'})}\n\n"
-
-            # 流式调用 LLM
-            full_content = ""
-            async for token in llm.chat_messages_stream(messages, temperature=0.5, max_tokens=4096):
-                full_content += token
-                yield f"data: {json.dumps({'type': 'token', 'data': {'content': token}})}\n\n"
-
-            # 检查空回复
-            if not full_content or not full_content.strip():
-                logger.warning(f"[GlobalChat-Stream] LLM 返回空回复")
-                full_content = "抱歉，我暂时无法回答这个问题。请稍后重试，或者尝试换一种提问方式。"
-                yield f"data: {json.dumps({'type': 'token', 'data': {'content': full_content}})}\n\n"
-
-            # 保存历史
-            history.append({"role": "user", "content": user_message})
-            history.append({"role": "assistant", "content": full_content})
-
-            # 限制历史长度
-            if len(history) > 40:
-                _global_chat_histories[session_id] = history[-40:]
-
-            # 发送完成事件
-            yield f"data: {json.dumps({'type': 'done', 'data': {'reply': full_content}})}\n\n"
-
-            logger.info(
-                f"[GlobalChat-Stream] session={session_id}: "
-                f"reply={len(full_content)} chars, history={len(_global_chat_histories[session_id])} msgs"
-            )
-        except Exception as e:
-            logger.error(f"[GlobalChat-Stream] 对话失败: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'data': {'message': str(e)}})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
+            yield f"data: {json.dumps({'type': 'done', 'data': result}, ensure_ascii=False)}\n\n"
+        except Exception:
+            yield f"data: {json.dumps({'type': 'error', 'data': {'message': '知识查询暂不可用，请稍后重试'}}, ensure_ascii=False)}\n\n"
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/global-chat/history")
-async def get_global_chat_history(session_id: str = "default"):
-    """获取全局对话历史"""
-    history = _global_chat_histories.get(session_id, [])
-    return {"messages": history, "session_id": session_id}
+def get_global_chat_history(session_id: str = "default"):
+    from knowledge import schema as k
+    from sqlalchemy import select
+    repo = repository()
+    messages = []
+    if repo and settings.knowledge_enabled:
+        with repo.engine.connect() as c:
+            rows = list(c.execute(select(k.queries).where(k.queries.c.workspace_id == PERSONAL_WORKSPACE,
+                k.queries.c.conversation == session_id).order_by(k.queries.c.created_at.desc()).limit(20)).mappings())
+        for row in reversed(rows):
+            messages.extend([{"role": "user", "content": row["question"]}, {"role": "assistant", "content": row["response"]["reply"]}])
+    return {"messages": messages, "session_id": session_id}
 
 
 @app.delete("/api/global-chat/history")
-async def clear_global_chat_history(session_id: str = "default"):
-    """清空全局对话历史"""
-    if session_id in _global_chat_histories:
-        del _global_chat_histories[session_id]
-    logger.info(f"[GlobalChat] session={session_id} 历史已清空")
+def clear_global_chat_history(session_id: str = "default"):
+    from knowledge import schema as k
+    from sqlalchemy import update
+    repo = repository()
+    if repo and settings.knowledge_enabled:
+        with repo.engine.begin() as c:
+            c.execute(update(k.queries).where(k.queries.c.workspace_id == PERSONAL_WORKSPACE,
+                k.queries.c.conversation == session_id).values(conversation="cleared-" + uuid.uuid4().hex))
     return {"status": "cleared"}
 
 
