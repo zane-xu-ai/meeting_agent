@@ -55,3 +55,21 @@ def coverage():
         total=c.scalar(select(func.count()).select_from(k.sessions).where(*filters))
         dates=c.scalar(select(func.count()).select_from(k.sessions).where(*filters,k.sessions.c.time_status=='confirmed'))
         return {'sessions':total,'confirmed_dates':dates,'unknown_or_candidate_dates':total-dates,'revision':revision(c,PERSONAL)}
+
+class QueryRequest(BaseModel):
+    question:str=Field(min_length=1,max_length=2000)
+    conversation:str=Field(default='default',min_length=1,max_length=100)
+    timezone:str=Field(default='Asia/Shanghai',max_length=80)
+
+@router.post('/query')
+def ask(body:QueryRequest):
+    from knowledge.query import query
+    return query(repo_required(),PERSONAL,body.question,body.conversation,timezone_name=body.timezone)
+
+@router.get('/evidence/{evidence_id}')
+def get_evidence(evidence_id:uuid.UUID):
+    with repo_required().engine.connect() as c:
+        row=c.execute(select(k.evidence).join(k.sessions,k.sessions.c.id==k.evidence.c.session_id).where(
+            k.evidence.c.workspace_id==PERSONAL,k.evidence.c.id==evidence_id,k.sessions.c.deleted.is_(False))).mappings().one_or_none()
+        if row is None:raise HTTPException(404,'引用不存在或已撤销')
+        return dict(row)

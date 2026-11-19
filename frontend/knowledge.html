@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>历史问答 · Meeting Agent</title>
+<style>
+:root{font:15px system-ui;color:#243247;background:#f5f6fa}body{max-width:1100px;margin:2rem auto;padding:0 20px}nav{display:flex;gap:16px}a{color:#5856d6}h1{margin-bottom:8px}section{background:#fff;border:1px solid #e0e4ed;border-radius:14px;padding:22px;margin-top:20px}input,select,textarea,button{font:inherit;padding:9px 12px;border:1px solid #d4d9e4;border-radius:8px}textarea{width:100%;box-sizing:border-box}button{cursor:pointer;background:#6366f1;color:white;border:0}form{display:flex;gap:10px;align-items:center;flex-wrap:wrap}#question{flex:1;min-width:200px}pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.75}table{border-collapse:collapse;width:100%}td,th{text-align:left;border-bottom:1px solid #e0e4ed;padding:12px 8px}#meetings{overflow:auto}#message{color:#914520}[hidden]{display:none!important}label{display:flex;gap:8px;align-items:center}li{margin-bottom:10px}small{color:#657189}
+</style>
+<nav><a href="/">会议助手</a><a href="/history.html">分析历史</a><a href="/batch.html">批量任务</a></nav>
+<h1>历史问答</h1><p>按会议发生日期查询人员和主题，答案附事实覆盖情况及来源。</p>
+<p id="message" role="status"></p>
+<section><form id="ask"><input id="question" aria-label="问题" placeholder="上周的会议有哪些人参加？" required maxlength="2000"><button>查询</button></form>
+<p id="coverage"></p><pre id="reply"></pre><ul id="evidence"></ul><div id="feedback" hidden><button id="helpful">有帮助</button> <button id="incorrect">需要改进</button></div></section>
+<section><h2>会议日期与名单确认</h2><p id="stats"></p><div id="meetings"><table><thead><tr><th>会议</th><th>日期</th><th>状态</th><th>操作</th></tr></thead><tbody id="rows"></tbody></table></div><button id="more" hidden>更多</button>
+<form id="confirm" hidden><input id="session" type="hidden"><label>发生日期 <input id="eventDate" type="date" required></label><label>确认参会人 <input id="names" placeholder="逗号分隔；留空保持原名单"></label><button>保存确认</button></form>
+<pre id="detail"></pre></section>
+<script src="/knowledge.js" defer></script></html>
