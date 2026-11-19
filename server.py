@@ -1625,6 +1625,10 @@ async def vector_store_stats():
         return {"error": str(e), "child_count": 0, "parent_count": 0}
 
 
+from knowledge.api import router as knowledge_router
+app.include_router(knowledge_router)
+
+
 # ── Serve Frontend ───────────────────────────────────────────
 
 frontend_dir = Path(__file__).parent / "frontend"
