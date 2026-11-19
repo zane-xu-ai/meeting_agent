@@ -81,15 +81,17 @@
 
     /* ── Header ─────────────────────────────── */
     .header {
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       align-items: center;
-      justify-content: space-between;
+      gap: 20px;
       padding: 18px 0 16px;
       border-bottom: 1px solid var(--border);
       margin-bottom: 24px;
     }
 
     .header-left {
+      min-width: 0;
       display: flex;
       align-items: center;
       gap: 14px;
@@ -147,6 +149,75 @@
       display: flex;
       align-items: center;
       gap: 16px;
+    }
+
+    .header-nav {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--bg-card);
+    }
+
+    .header-nav a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 36px;
+      padding: 7px 14px;
+      border-radius: 8px;
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.5;
+      text-decoration: none;
+      white-space: nowrap;
+      transition: color 0.2s, background 0.2s, box-shadow 0.2s;
+    }
+
+    .header-nav a:hover {
+      color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    .header-nav a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .header-nav .header-nav-primary {
+      color: #fff;
+      background: var(--accent);
+      box-shadow: 0 2px 5px var(--accent-glow);
+    }
+
+    .header-nav .header-nav-primary:hover {
+      color: #fff;
+      background: var(--accent-hover);
+    }
+
+    @media (max-width: 820px) {
+      .header {
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+      }
+
+      .header-nav {
+        grid-column: 1 / -1;
+        grid-row: 2;
+      }
+
+      .header-nav a {
+        flex: 1;
+      }
+
+      .header-right {
+        grid-column: 2;
+        grid-row: 1;
+        gap: 12px;
+      }
     }
 
     .theme-toggle {
@@ -1328,7 +1399,25 @@
       }
 
       .header {
-        padding: 20px 0 24px;
+        padding: 20px 0 18px;
+      }
+
+      .header-left {
+        gap: 10px;
+      }
+
+      .header h1 {
+        font-size: 19px;
+      }
+
+      .header p {
+        font-size: 11px;
+      }
+
+      .logo {
+        width: 36px;
+        height: 36px;
+        flex-shrink: 0;
       }
 
       .upload-zone {
@@ -1600,7 +1689,6 @@
 </head>
 
 <body>
-  <nav style="padding: .6rem 1rem"><a href="/history.html">分析历史</a> · <a href="/batch.html">批量任务</a></nav>
   <div id="app">
     <!-- Header -->
     <header class="header">
@@ -1611,6 +1699,10 @@
           <p>智能音视频分析 · 自动生成结构化总结</p>
         </div>
       </div>
+      <nav class="header-nav" aria-label="功能导航">
+        <a href="/history.html">分析历史</a>
+        <a class="header-nav-primary" href="/batch.html">批量任务</a>
+      </nav>
       <div class="header-right">
         <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px;">
           <div style="display:flex;align-items:center;gap:6px;">
