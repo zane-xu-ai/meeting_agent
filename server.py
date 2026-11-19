@@ -1461,7 +1461,7 @@ async def global_chat(req: GlobalChatRequest):
     if rag_context:
         system_prompt += f"\n\n## 相关历史记录\n{rag_context}"
     else:
-        system_prompt += "\n\n## 提示\n当前向量库中无相关历史记录，请基于你的知识回答。"
+        return {"reply": "当前没有可引用的会议记录。请先确认记录范围和知识构建状态。", "status": "no_match", "evidence": []}
 
     # 构建 messages
     messages = [{"role": "system", "content": system_prompt}]
@@ -1539,7 +1539,10 @@ async def global_chat_stream(req: GlobalChatRequest):
     if rag_context:
         system_prompt += f"\n\n## 相关历史记录\n{rag_context}"
     else:
-        system_prompt += "\n\n## 提示\n当前向量库中无相关历史记录，请基于你的知识回答。"
+        async def missing_evidence():
+            payload = {"type": "done", "data": {"reply": "当前没有可引用的会议记录。请先确认记录范围和知识构建状态。", "status": "no_match"}}
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        return StreamingResponse(missing_evidence(), media_type="text/event-stream")
 
     # 构建 messages
     messages = [{"role": "system", "content": system_prompt}]
