@@ -22,6 +22,11 @@ def execute(c,workspace,p):
     events=list(c.execute(query.order_by(k.sessions.c.event_date,k.sessions.c.id)).mappings())
     ids=[item['id'] for item in events]
     if len(ids)>10000:raise Clarification('匹配会议超过一万场，请缩小范围')
+    if p.person:
+        matches=list(c.execute(select(k.people.c.id,k.people.c.name).outerjoin(k.aliases,k.aliases.c.person_id==k.people.c.id).where(k.people.c.workspace_id==workspace,k.people.c.active.is_(True),
+            (k.people.c.name==p.person)|((k.aliases.c.alias==p.person)&k.aliases.c.confirmed.is_(True))).distinct()).mappings())
+        if len(matches)>1:raise Clarification('该姓名或别名对应多个人物，请指定身份')
+        if matches:p.person=matches[0]['name']
     participants=list(c.execute(select(k.participants).where(k.participants.c.session_id.in_(ids),k.participants.c.active.is_(True))).mappings()) if ids else []
     topics=list(c.execute(select(k.topics).where(k.topics.c.session_id.in_(ids),k.topics.c.active.is_(True))).mappings()) if ids else []
     evidence_ids={row['evidence_id'] for row in [*participants,*topics]}
@@ -98,10 +103,10 @@ def query(repo,workspace,question,conversation='default',*,anchor=None,timezone_
         version=revision(c,workspace)
         try:
             p=plan(question,anchor,timezone_name,previous)
-            if p.intent=='relations':raise Clarification('请先指定项目、决策或行动项，关系查询需要已登记的证据')
+            if p.intent=='relations' and not p.terms:raise Clarification('请用引号明确实体名称，例如“上周项目‘甲’的决定”，实体请使用中文双引号')
             normalized=p.model_dump(mode='json')
             cache_key=fingerprint(['query-v2',normalized,version,settings.knowledge_semantic_enabled,settings.knowledge_rerank_enabled,settings.embedding_model,settings.rerank_model])
-            if p.intent!='search':
+            if p.intent not in ('search','relations'):
                 cached=c.scalar(select(k.queries.c.response).where(k.queries.c.workspace_id==workspace,k.queries.c.knowledge_revision==version,
                     k.queries.c.plan['cache_key'].astext==cache_key,k.queries.c.created_at>datetime.now(timezone.utc)-timedelta(seconds=60)).order_by(k.queries.c.created_at.desc()).limit(1))
             if cached:
@@ -113,6 +118,13 @@ def query(repo,workspace,question,conversation='default',*,anchor=None,timezone_
         except Clarification as error:
             result={'status':'clarify','reply':str(error),'evidence':[],'claims':[]}
             normalized={'question':question}
+        if result['status']!='clarify' and p.intent=='relations':
+            from knowledge.relations import traverse
+            graph=traverse(c,workspace,[p.terms],[event['id'] for event in facts],hops=2,at=anchor)
+            labels={node['id']:node['name'] for node in graph['nodes']}
+            result.update(graph=graph,evidence=graph['evidence'],claims=[{'evidence_ids':[str(edge['evidence_id'])]} for edge in graph['edges']])
+            result['reply']='查询已登记的有效关系：\n'+'\n'.join(labels[edge['source_id']]+' → '+edge['kind']+' → '+labels[edge['target_id']] for edge in graph['edges'])
+            result['status']='partial' if graph['edges'] else 'no_match'
         if result['status']!='clarify' and p.intent=='search':
             from knowledge.retrieval import retrieve
             hits,search_coverage=retrieve(c,workspace,[event['id'] for event in facts],p.terms)

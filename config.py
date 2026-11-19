@@ -109,6 +109,7 @@ class Settings(BaseSettings):
 
     # 本机部署默认通过 SSH 回环访问。
     workspace_token: str = ""
+    knowledge_aggregate_enabled: bool = False
     knowledge_enabled: bool = True
     knowledge_semantic_enabled: bool = False
     knowledge_rerank_enabled: bool = False

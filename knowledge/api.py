@@ -98,3 +98,59 @@ def delete_session(session_id:uuid.UUID):
         c.execute(update(k.sessions).where(k.sessions.c.id==session_id).values(deleted=True))
         bump(c,PERSONAL)
     return {'deleted':True}
+
+@router.get('/people')
+def people():
+    with repo_required().engine.connect() as c:
+        return {'items':list(map(dict,c.execute(select(k.people).where(k.people.c.workspace_id==PERSONAL,k.people.c.active.is_(True)).order_by(k.people.c.name).limit(200)).mappings()))}
+
+class AliasInput(BaseModel):
+    alias:str=Field(min_length=1,max_length=100)
+
+@router.put('/people/{person_id}/alias')
+def set_alias(person_id:uuid.UUID,body:AliasInput):
+    from knowledge.relations import alias
+    try:alias(repo_required(),PERSONAL,person_id,body.alias.strip())
+    except LookupError as error:raise HTTPException(404,str(error)) from error
+    return {'updated':True}
+
+@router.delete('/people/{person_id}/alias')
+def unset_alias(person_id:uuid.UUID,body:AliasInput):
+    from knowledge.relations import remove_alias
+    try:remove_alias(repo_required(),PERSONAL,person_id,body.alias)
+    except LookupError as error:raise HTTPException(404,str(error)) from error
+    return {'updated':True}
+
+from knowledge.relations import RelationInput
+
+@router.post('/relations')
+def add_relation(body:RelationInput):
+    from knowledge.relations import add
+    try:return {'id':add(repo_required(),PERSONAL,body)}
+    except LookupError as error:raise HTTPException(404,str(error)) from error
+    except ValueError as error:raise HTTPException(422,str(error)) from error
+
+class GraphRequest(BaseModel):
+    names:list[str]=Field(min_length=1,max_length=10)
+    session_ids:list[uuid.UUID]=Field(min_length=1,max_length=100)
+    hops:int=Field(default=2,ge=1,le=3)
+
+@router.post('/graph')
+def graph(body:GraphRequest):
+    from knowledge.relations import traverse
+    from knowledge.query import json_safe
+    with repo_required().engine.connect() as c:
+        for session in body.session_ids:
+            try:owned(c,PERSONAL,session)
+            except LookupError as error:raise HTTPException(404,str(error)) from error
+        return json_safe(traverse(c,PERSONAL,body.names,body.session_ids,hops=body.hops))
+
+@router.post('/aggregate')
+def aggregate(body:QueryRequest):
+    from config import settings
+    from knowledge.aggregate import from_question,execute
+    if not settings.knowledge_aggregate_enabled:raise HTTPException(409,'受约束统计实验尚未启用，请使用常规名单统计')
+    try:p=from_question(body.question,timezone_name=body.timezone)
+    except ValueError as error:raise HTTPException(422,str(error)) from error
+    with repo_required().engine.begin() as c:
+        return {'plan':p.model_dump(mode='json'),'items':execute(c,PERSONAL,p),'completeness':'confirmed_records_only'}

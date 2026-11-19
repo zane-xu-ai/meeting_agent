@@ -29,6 +29,9 @@ def period(question,anchor,timezone):
     if anchor.tzinfo is None:raise Clarification('查询时刻需要带时区')
     today=anchor.astimezone(zone).date()
     monday=today-timedelta(days=today.weekday())
+    if '上季度' in question:
+        this_quarter=date(today.year,((today.month-1)//3)*3+1,1)
+        return month_start(this_quarter,-3),this_quarter
     if '去年今天' in question:
         try:target=today.replace(year=today.year-1)
         except ValueError as error:raise Clarification('去年没有 2 月 29 日，请指定 2 月 28 日或 3 月 1 日') from error
@@ -66,6 +69,9 @@ def plan(question,anchor,timezone='Asia/Shanghai',previous=None):
     match=re.search(r'(?:讨论|涉及)(.+?)(?:的有哪些|的会议|有哪些|[？?]|$)',question)
     if intent=='search' and match:terms=match.group(1).strip('了过的 ')
     if intent=='search' and not terms:raise Clarification('请给出要搜索的主题')
+    if intent=='relations':
+        entity=re.search(r'[“\"]([^”\"]+)[”\"]',question)
+        terms=entity.group(1) if entity else None
     person=None
     match=re.search(r'(?:里|其中|中|，|,)([^\s，,？?]{1,20}?)(?:参加几次|参会几次)',question)
     if match:person=match.group(1)
