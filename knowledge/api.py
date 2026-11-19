@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from persistence.repository import PERSONAL, repository
 from persistence import schema as base
 from knowledge import schema as k
-from knowledge.store import confirm, owned, revision
+from knowledge.store import confirm, owned, revision, EXTRACTOR
 
 router = APIRouter(prefix="/api/knowledge")
 
@@ -130,7 +130,7 @@ def coverage():
             c.execute(
                 select(k.builds.c.status, func.count())
                 .join(k.sessions, k.sessions.c.id == k.builds.c.session_id)
-                .where(*filters)
+                .where(*filters, k.builds.c.extractor_version == EXTRACTOR)
                 .group_by(k.builds.c.status)
             ).all()
         )
@@ -142,6 +142,7 @@ def coverage():
             .where(
                 base.analysis_jobs.c.workspace_id == PERSONAL,
                 k.builds.c.status == "failed",
+                k.builds.c.extractor_version == EXTRACTOR,
             )
         )
         chunks = c.execute(

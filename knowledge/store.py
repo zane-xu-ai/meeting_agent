@@ -12,7 +12,7 @@ from sqlalchemy.dialects.postgresql import insert as upsert
 from persistence import schema as base
 from knowledge import schema as k
 
-EXTRACTOR = "facts-v1"
+EXTRACTOR = "facts-v2"
 
 
 def bump(connection, workspace):
@@ -324,7 +324,7 @@ def build(repo, analysis_id):
         if not titles and isinstance(summary, str) and summary.strip():
             titles.append(("报告摘要", summary))
         for title, summary in titles:
-            part = next((p for p in segments if title in p["text"]), None)
+            part = next((p for p in segments if summary and summary in p["text"]), None)
             evidence = add_evidence(
                 c,
                 workspace,

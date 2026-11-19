@@ -11,7 +11,7 @@
 | K2 | 日历解析、模板 SQL、按事件去重、名单和主题问答 | `48d7f53` / `knowledge-baseline-v1` |
 | K3 | 授权事件过滤、词法/向量 RRF、可选精排、多轮与版本缓存 | `de2f628` / `knowledge-hybrid-v1` |
 | K4 | 可撤销人物别名、时态关系和最多三跳、受约束统计 AST | `70e4a26` / `knowledge-query-target-v1` |
-| K5 | 主页面入口、旧聊天兼容、覆盖/反馈/观测、恢复与上线 | `knowledge-release-rc2`（功能验收版本） |
+| K5 | 主页面入口、旧聊天兼容、覆盖/反馈/观测、恢复与上线 | `knowledge-release-rc3`（功能验收版本） |
 
 Mac 页面：<http://127.0.0.1:19190/knowledge.html>。首页右上角「历史问答」也可进入。需要保持原有 SSH 转发。
 
@@ -87,7 +87,7 @@ node tests/question_download_frontend.cjs
 
 恢复步骤：停止知识 worker，运行 `uv run --locked python -m knowledge.worker --rebuild --once`，再启动 worker；后台继续处理剩余批次。此操作保留人工确认与软删除，不调用 ASR。回滚开关 `KNOWLEDGE_ENABLED=false` 可停用新入口，关闭语义/精排/统计实验可退回模板通路。先回滚应用源码和配置，保留新增表；不要直接降级删除证据表。
 
-上线前备份数据库和源码到部署账号私有目录，保留 `.env`。24 小时观测服务每分钟检查健康与覆盖，原子写入 `data/knowledge-observation.json`（权限 0600）。它只做真实被动观测，不制造用户流量；`status=completed` 也不代表质量/混合负载自动达标。当前发布为 RC，24 小时观测、真实语料人物 precision/recall、旧路径对照 Recall@20、开放意图执行率及 1 万事件/100 万段 P95 仍需独立验收，不标记为已通过。
+上线前备份数据库和源码到部署账号私有目录，保留 `.env`。24 小时观测服务每分钟检查健康、覆盖与指标，原子写入 `data/knowledge-observation.json`（权限 0600）。它只做真实被动观测，不制造用户流量；`status=completed` 也不代表质量/混合负载自动达标。当前发布为 RC，24 小时观测、真实语料人物 precision/recall、旧路径对照 Recall@20、开放意图执行率及 1 万事件/100 万段 P95 仍需独立验收，不标记为已通过。
 
 
 ## 本次 Ubuntu 上线记录（2026-11-20）
@@ -95,5 +95,5 @@ node tests/question_download_frontend.cjs
 - 数据库备份：`~/.config/meeting-agent/backups/knowledge-c9996bf/meeting_agent.dump`；源码、配置备份位于同目录，仅部署账号可读。
 - 增量迁移已完成，新增表运行权限已验证；Web、dispatcher、四类 worker、GPU watch、knowledge worker 和观测服务运行正常。
 - 已有 9 条分析回填成功、0 条失败，生成 9 场事件与 522 段转写投影；0 场确认日期、0 段云端向量（默认关闭语义）。当前没有 meeting 类历史任务，因此示例会议问题返回无匹配；面试查询显示待确认日期覆盖，不伪造答案。
-- 上线冒烟验证首页、问答、历史、批量页面；日期/名单/主题查询与缺年份澄清。指标接口发现 JSONB 分组参数错误，已增加真实 PostgreSQL API 回归并修正为分组别名，补丁发布为 RC2。
-- Mac 的 `19190` SSH 转发已核实可用，无需改动。24 小时被动观测正在运行，尚未完成长期验收。
+- 上线冒烟验证首页、问答、历史、批量页面；日期/名单/主题查询与缺年份澄清。指标接口发现 JSONB 分组参数错误，已增加真实 PostgreSQL API 回归并修正为分组别名，指标补丁发布为 RC2；RC3 进一步校正主题证据类型：原文未完整支持的摘要引用分析报告，不将仅出现同主题词的转写当作结论依据。投影版本升级到 `facts-v2` 后自动回填。
+- Mac 的 `19190` SSH 转发已核实可用，无需改动；真实 Chrome 验收桌面与 390px 手机导航、问答提交与覆盖展示，浏览器脚本错误为 0。24 小时被动观测正在运行，尚未完成长期验收。

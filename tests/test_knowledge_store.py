@@ -129,7 +129,9 @@ class KnowledgeStoreTests(unittest.TestCase):
                     .values(
                         result_json={
                             "participants": None,
-                            "topics": [{"title": "真实议题", "summary": None}],
+                            "topics": [
+                                {"title": "预算", "summary": "只在分析报告中的结论"}
+                            ],
                             "keywords": None,
                         }
                     )
@@ -163,5 +165,20 @@ class KnowledgeStoreTests(unittest.TestCase):
                             k.topics.c.active.is_(True),
                         )
                     ),
-                    "真实议题",
+                    "预算",
                 )
+
+                proof = (
+                    c.execute(
+                        select(k.evidence)
+                        .join(k.topics, k.topics.c.evidence_id == k.evidence.c.id)
+                        .where(
+                            k.topics.c.session_id == session,
+                            k.topics.c.active.is_(True),
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                self.assertEqual(proof["kind"], "analysis")
+                self.assertEqual(proof["quote"], "只在分析报告中的结论")

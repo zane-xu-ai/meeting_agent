@@ -28,7 +28,9 @@ if __name__ == "__main__":
             time.sleep(10)
             continue
         try:
-            logger.info("知识构建完成 {} 条", backfill(repo))
+            processed = backfill(repo)
+            if processed or args.once:
+                logger.info("知识构建完成 {} 条", processed)
             from knowledge.retrieval import index
 
             index(repo)
