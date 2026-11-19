@@ -17,6 +17,10 @@ def sample(base_url):
     ]:
         with urlopen(base_url + path, timeout=5) as response:
             result[key] = json.load(response)
+    with urlopen(base_url + "/api/knowledge/metrics", timeout=5) as response:
+        if "meeting_knowledge_revision" not in response.read().decode():
+            raise ValueError("Invalid metrics response")
+    result["metrics_ready"] = True
     return result
 
 

@@ -356,9 +356,12 @@ def metrics():
 
     with repo_required().engine.connect() as c:
         counts = c.execute(
-            select(k.queries.c.response["status"].astext, func.count())
+            select(
+                k.queries.c.response["status"].astext.label("query_status"),
+                func.count(),
+            )
             .where(k.queries.c.workspace_id == PERSONAL)
-            .group_by(k.queries.c.response["status"].astext)
+            .group_by("query_status")
         ).all()
         lines = [
             f'meeting_knowledge_queries{{status="{status}"}} {count}'

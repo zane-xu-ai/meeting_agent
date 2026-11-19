@@ -64,3 +64,6 @@ class KnowledgeAPITests(unittest.TestCase):
             self.assertLessEqual(data["embedded_chunks"], data["current_chunks"])
             self.assertGreaterEqual(data["completed_builds"], 0)
             self.assertGreaterEqual(data["failed_builds"], 0)
+            metrics = client.get("/api/knowledge/metrics")
+            self.assertEqual(metrics.status_code, 200)
+            self.assertIn("meeting_knowledge_revision", metrics.text)
