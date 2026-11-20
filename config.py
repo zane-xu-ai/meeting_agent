@@ -17,14 +17,12 @@ DEFAULT_ASR_MODELS: List[str] = [
 ]
 
 DEFAULT_LLM_MODELS: List[str] = [
-    "qwen3.7-flash-2026-07-15",
-    "qwen3.7-flash",
-    "deepseek-v4-flash-0731",
-    "qwen3.8-max",
-    "glm-5.3",
     "qwen3.8-flash",
     "qwen3.8-max-0902",
     "deepseek-v4.1-flash",
+    "deepseek-v4.1-flash-1017",
+    "kimi-k3.1-pro",
+    "qwen4-max"
 ]
 
 

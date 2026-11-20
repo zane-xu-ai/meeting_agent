@@ -50,7 +50,7 @@ test -f .env || install -m 600 .env.example .env
 
 本次使用 uv 0.13.7。若 Ubuntu 直连下载缓慢且原有代理可用，可用 `HTTPS_PROXY=http://127.0.0.1:17890 ./start.sh` 仅加速启动时的依赖下载。
 
-录音转写和分析前，在 Ubuntu 的 `.env` 中填写百炼账号的 `DASHSCOPE_API_KEY`。LLM 默认复用这个密钥。使用其他兼容服务时按需设置 `LLM_API_KEY`、`LLM_BASE_URL` 和 JSON 数组格式的 `LLM_MODELS`。`ASR_MODELS` 也使用 JSON 数组。旧配置中的单数 `LLM_MODEL` 应迁移成 `LLM_MODELS`。在线视频需要登录态时，可将 Netscape 格式 cookies 放到 `data/cookies/`。配置和 cookies 留在部署账户内。
+录音转写和分析前，在 Ubuntu 的 `.env` 中填写百炼账号的 `DASHSCOPE_API_KEY`。LLM 默认复用这个密钥。使用其他兼容服务时按需设置 `LLM_API_KEY`、`LLM_BASE_URL` 和 JSON 数组格式的 `LLM_MODELS`。`ASR_MODELS` 也使用 JSON 数组。 自动模式按 `LLM_MODELS` 顺序回退，当前顺序为 `qwen3.8-flash` → `qwen3.8-max-0902` → `deepseek-v4.1-flash` → `deepseek-v4.1-flash-1017` → `kimi-k3.1-pro` → `qwen4-max`，成功即停止。旧配置中的单数 `LLM_MODEL` 应迁移成 `LLM_MODELS`。在线视频需要登录态时，可将 Netscape 格式 cookies 放到 `data/cookies/`。配置和 cookies 留在部署账户内。
 
 ### 从 Mac 访问
 
@@ -129,7 +129,7 @@ curl -X POST http://localhost:9090/api/submit-url \
 | `DASHSCOPE_API_KEY` | 空 | ASR 密钥，也是 LLM 默认密钥来源 |
 | `LLM_API_KEY` | 复用百炼密钥 | 独立 LLM 密钥 |
 | `LLM_BASE_URL` | 百炼兼容接口地址 | LLM 服务地址 |
-| `LLM_MODELS` | 首项 `qwen3.7-flash-2026-07-15` | LLM 模型优先级列表 |
+| `LLM_MODELS` | 首项 `qwen3.8-flash` | LLM 模型优先级列表 |
 | `ASR_MODELS` | 首项 `paraformer-v2` | ASR 模型优先级列表 |
 | `ASR_SAMPLE_RATE` | `16000` | 预处理采样率 |
 | `MAX_TOKENS_PER_CHUNK` | `6000` | 文本分片 token 预算 |

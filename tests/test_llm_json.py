@@ -87,3 +87,23 @@ class JSONChatTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(await client.chat("你好"), "普通回复")
         self.assertNotIn("response_format", self.requests[0])
+
+    async def test_auto_mode_uses_new_order_and_stops_at_first_success(self):
+        from config import DEFAULT_LLM_MODELS
+
+        expected = [
+            'qwen3.8-flash', 'qwen3.8-max-0902', 'deepseek-v4.1-flash',
+            'deepseek-v4.1-flash-1017', 'kimi-k3.1-pro', 'qwen4-max',
+        ]
+        self.assertEqual(DEFAULT_LLM_MODELS, expected)
+        for failures in (0, 3, 4, 5):
+            with self.subTest(failures=failures):
+                self.requests = []
+                self.responses = [httpx.Response(403) for _ in range(failures)] + [
+                    completion('{"ok":true}')
+                ]
+                with patch('agent.llm_client.settings.llm_models', DEFAULT_LLM_MODELS):
+                    client = LLMClient(api_key='test', base_url='https://example.test/v1')
+                    self.assertEqual(await client.chat_json('回退顺序验收'), {'ok': True})
+                self.assertEqual([r['model'] for r in self.requests], expected[:failures + 1])
+                self.assertEqual(client.model, expected[failures])
